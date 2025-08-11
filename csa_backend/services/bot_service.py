@@ -19,8 +19,8 @@ from services.pinecone_service import store_documents,index,openai_client
 app = FastAPI()
 
 
-OPENAI_API_KEY = os.getenv("OPENAIIND")
-PINECONE_API_KEY = os.getenv("PINECONEIND")
+OPENAI_API_KEY = os.getenv("CSA_OPENAIIND")
+PINECONE_API_KEY = os.getenv("CSA_PINECONEIND")
 
 # openai_client = OpenAI(api_key=OPENAI_API_KEY)
 # Initialize Pinecone (replace with your API key and index name)
