@@ -15,15 +15,15 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Load environment variables for Supabase configuration and secrets
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") 
-SUPABASE_REDIRECT_URL = os.getenv("SUPABASE_REDIRECT_URL")
+SUPABASE_URL = os.getenv("CSA_SUPABASE_URL")
+SUPABASE_KEY = os.getenv("CSA_SUPABASE_SERVICE_KEY") 
+SUPABASE_REDIRECT_URL = os.getenv("CSA_SUPABASE_REDIRECT_URL")
 
 # OAuth provider for Supabase (e.g., "google")
-PROVIDER = os.getenv("SUPABASE_GOOGLE_PROVIDER")  # service_role key recommended for admin privileges
+PROVIDER = os.getenv("CSA_SUPABASE_GOOGLE_PROVIDER")  # service_role key recommended for admin privileges
 
 # JWT configuration
-JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY")  # Secret key used to encode/decode JWT tokens
+JWT_SECRET_KEY = os.getenv("CSA_JWT_SECRET_KEY")  # Secret key used to encode/decode JWT tokens
 ALGORITHM = "HS256"  # JWT signing algorithm
 
 # Initialize Supabase client

@@ -14,9 +14,9 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
 # Get values from environment variables
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "your-secret-key")
+SUPABASE_URL = os.getenv("CSA_SUPABASE_URL")
+SUPABASE_KEY = os.getenv("CSA_SUPABASE_SERVICE_KEY")
+JWT_SECRET_KEY = os.getenv("CSA_JWT_SECRET_KEY")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
 
