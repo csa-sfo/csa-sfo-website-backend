@@ -27,8 +27,12 @@ async def lifespan(app: FastAPI):
         #logging.info(f"Connecting to Redis at {redis_url}")
         if not redis_url:
             raise ValueError("REDIS_URL is not set in the environment variables.")
-        redis = Redis.from_url(redis_url, decode_responses=True)
-        init_redis_client(redis)
+        try:
+            redis = Redis.from_url(redis_url, decode_responses=True)
+            init_redis_client(redis)
+        except Exception as e:
+            logging.warning(f"Failed to connect to Redis: {e}. Continuing without Redis cache.")
+            redis = None
 
     
 
@@ -74,7 +78,8 @@ async def lifespan(app: FastAPI):
         # Cleanup resources in finally block to ensure they run even on errors
         if hasattr(app.state, 'scheduler'):
             app.state.scheduler.shutdown()
-        await redis.close()
+        if redis:
+            await redis.close()
         pass
 
 # Create the FastAPI app once
