@@ -12,8 +12,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 volunteer_router = APIRouter()
 
 # Load Supabase credentials
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")  # Use service role key for secure inserts
+SUPABASE_URL = os.getenv("CSA_SUPABASE_URL")
+SUPABASE_KEY = os.getenv("CSA_SUPABASE_SERVICE_KEY")  # Use service role key for secure inserts
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 @volunteer_router.post("/volunteers")
