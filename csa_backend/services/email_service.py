@@ -6,6 +6,7 @@ from pydantic import EmailStr
 import logging, html2text
 from mailersend import emails
 import re
+from typing import Optional, Dict, Any
 
 # Create the client once – internal httpx session is re-used
 _mailer = emails.NewEmail(MAILERSEND_API_KEY)
@@ -46,6 +47,7 @@ async def send_mailersend(
     # Fire & forget – API returns 202 JSON on success
     resp = _mailer.send(mail)
     logging.info("MailerSend response: %s", resp)           # optional
+    return resp
 
 
 
@@ -82,6 +84,127 @@ async def draft_email_body_html(form: ContactForm) -> str:
     m = re.search(r"```(?:html)?\s*(.*?)```", html_body, re.DOTALL | re.IGNORECASE)
     html_body = m.group(1) if m else html_body
     return html_body.strip()
+
+
+async def send_invoice_email(
+    to_email: str,
+    customer_name: str,
+    amount: float,
+    currency: str,
+    product_name: str,
+    payment_date: str,
+    payment_id: str
+) -> Dict[str, Any]:
+    """
+    Send an invoice email to the customer after successful payment.
+    
+    Args:
+        to_email: Customer's email address
+        customer_name: Customer's name
+        amount: Total amount paid
+        currency: Payment currency (e.g., 'USD')
+        product_name: Name of the product/service purchased
+        payment_date: Formatted date of payment
+        payment_id: Payment reference ID
+        
+    Returns:
+        Response from the email service
+    """
+    try:
+        # Format amount with currency symbol
+        amount_str = f"${amount:.2f}" if currency.lower() == 'usd' else f"{amount:.2f} {currency.upper()}"
+        
+        # Create email subject and body
+        subject = f"Your Invoice for {product_name}"
+        
+        # Create HTML email content
+        html_content = f"""
+        <html>
+            <head>
+                <style>
+                    body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
+                    .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
+                    .header {{ text-align: center; margin-bottom: 30px; }}
+                    .logo {{ max-width: 200px; margin-bottom: 20px; }}
+                    .content {{ background: #f9f9f9; padding: 20px; border-radius: 5px; }}
+                    .footer {{ margin-top: 30px; font-size: 12px; color: #777; text-align: center; }}
+                    .button {{
+                        display: inline-block;
+                        padding: 10px 20px;
+                        background-color: #4CAF50;
+                        color: white;
+                        text-decoration: none;
+                        border-radius: 5px;
+                        margin: 15px 0;
+                    }}
+                    table {{ width: 100%; border-collapse: collapse; margin: 20px 0; }}
+                    th, td {{ padding: 12px; text-align: left; border-bottom: 1px solid #ddd; }}
+                    th {{ background-color: #f2f2f2; }}
+                </style>
+            </head>
+            <body>
+                <div class="container">
+                    <div class="header">
+                        <h2>Thank you for your payment!</h2>
+                    </div>
+                    
+                    <div class="content">
+                        <p>Dear {customer_name or 'Valued Customer'},</p>
+                        
+                        <p>We've received your payment for <strong>{product_name}</strong>.</p>
+                        
+                        <h3>Payment Details</h3>
+                        <table>
+                            <tr>
+                                <th>Description</th>
+                                <th>Amount</th>
+                            </tr>
+                            <tr>
+                                <td>{product_name}</td>
+                                <td>{amount_str}</td>
+                            </tr>
+                            <tr>
+                                <td><strong>Total Paid</strong></td>
+                                <td><strong>{amount_str}</strong></td>
+                            </tr>
+                        </table>
+                        
+                        <p><strong>Payment Date:</strong> {payment_date}</p>
+                        <p><strong>Transaction ID:</strong> {payment_id}</p>
+                        
+                        <p>This email serves as your receipt. We appreciate your support!</p>
+                        
+                        <p>Best regards,<br>CSA San Francisco Chapter Team</p>
+                    </div>
+                    
+                    <div class="footer">
+                        <p>© {datetime.now().year} CSA San Francisco Chapter. All rights reserved.</p>
+                        <p>This is an automated message. Please do not reply to this email.</p>
+                    </div>
+                </div>
+            </body>
+        </html>
+        """.format(
+            customer_name=customer_name or 'Valued Customer',
+            product_name=product_name,
+            amount_str=amount_str,
+            payment_date=payment_date,
+            payment_id=payment_id,
+        )
+        
+        # Send the email
+        response = await send_mailersend(
+            to_email=to_email,
+            subject=subject,
+            html_body=html_content
+        )
+        
+        logging.info(f"Invoice email sent to {to_email} for payment {payment_id}")
+        return response
+        
+    except Exception as e:
+        logging.error(f"Error sending invoice email: {str(e)}")
+        raise
 
 async def process_contact(form: ContactForm, is_bot: bool = True):
     try:
