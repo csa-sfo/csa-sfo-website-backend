@@ -79,4 +79,4 @@ def get_all_volunteers():
 
     except Exception as e:
         logging.error(f"Error fetching volunteers: {e}")
-        raise HTTPException(status_code=500, detail=f"Error fetching volunteers: {e}")    
+        raise HTTPException(status_code=500, detail=f"Error fetching volunteers: {e}")

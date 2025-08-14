@@ -64,7 +64,7 @@ def create_event(event: Event, token_data: dict = Depends(verify_token)):
             "attendees": event.attendees,
             "reg_url": event.reg_url,
             "map_url": event.map_url,
-            "poster_url":event.poster_url,
+            "poster_url": event.poster_url,
             "admin_id": admin_id,
         }).execute()
 
