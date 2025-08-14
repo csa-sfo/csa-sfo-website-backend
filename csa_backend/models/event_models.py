@@ -37,5 +37,7 @@ class Event(BaseModel):
     
     reg_url: Optional[str]  # Registration URL (optional)
     map_url: Optional[str]  # Map location URL (optional)
+    poster_url: Optional[str]  # Poster image URL (optional)
+    video_url: Optional[str]  # Video recording URL (optional)
     capacity: int  # Total capacity for the event
     attendees: int = 0  # Current number of registered attendees
