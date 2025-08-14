@@ -74,7 +74,7 @@ async def create_checkout_session(data: CreateCheckoutSession):
             tax_id_collection={
                 'enabled': False,  # Disabled since automatic tax is off
             },
-            allow_promotion_codes=True,
+            allow_promotion_codes=False,
             billing_address_collection='auto',  # Changed from 'required' to 'auto' to be less restrictive
             submit_type='pay',
         )
