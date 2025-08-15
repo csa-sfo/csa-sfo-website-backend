@@ -23,16 +23,16 @@ logging.basicConfig(level=logging.INFO)
 async def lifespan(app: FastAPI):
     try:
     # ========== REDIS CACHE INITIALIZATION ==========
-        redis_url = REDIS_URL
-        #logging.info(f"Connecting to Redis at {redis_url}")
-        if not redis_url:
-            raise ValueError("REDIS_URL is not set in the environment variables.")
-        try:
-            redis = Redis.from_url(redis_url, decode_responses=True)
-            init_redis_client(redis)
-        except Exception as e:
-            logging.warning(f"Failed to connect to Redis: {e}. Continuing without Redis cache.")
-            redis = None
+        # redis_url = REDIS_URL
+        # #logging.info(f"Connecting to Redis at {redis_url}")
+        # if not redis_url:
+        #     raise ValueError("REDIS_URL is not set in the environment variables.")
+        # try:
+        #     redis = Redis.from_url(redis_url, decode_responses=True)
+        #     init_redis_client(redis)
+        # except Exception as e:
+        #     logging.warning(f"Failed to connect to Redis: {e}. Continuing without Redis cache.")
+        #     redis = None
 
     
 
@@ -87,6 +87,8 @@ app = FastAPI(
     title="IndraSol Web Service",
     description="A web service for IndraSol",
     version="1.0.0",
+    docs_url=f"/docs",
+    redirect_slashes=False,
     lifespan=lifespan
 )
 
@@ -101,8 +103,7 @@ origins = [
     "http://127.0.0.1:3000",
     "http://localhost:5173",  # Vite default port
     "http://127.0.0.1:5173",
-    "https://indrasol.com",
-    "https://development--indrasol.netlify.app",
+    "https://csasfo.com"
 ]
 
 # Add CORS middleware
