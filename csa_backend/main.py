@@ -84,8 +84,8 @@ async def lifespan(app: FastAPI):
 
 # Create the FastAPI app once
 app = FastAPI(
-    title="IndraSol Web Service",
-    description="A web service for IndraSol",
+    title="CSA SFO Website Server",
+    description="A web server for CSA SFO Website",
     version="1.0.0",
     docs_url=f"/docs",
     redirect_slashes=False,
