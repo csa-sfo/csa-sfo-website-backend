@@ -64,6 +64,7 @@ def create_event(event: Event, token_data: dict = Depends(verify_token)):
             "attendees": event.attendees,
             "reg_url": event.reg_url,
             "map_url": event.map_url,
+            "poster_url": event.poster_url,
             "admin_id": admin_id,
         }).execute()
 
@@ -105,7 +106,7 @@ def create_event(event: Event, token_data: dict = Depends(verify_token)):
         raise HTTPException(status_code=500, detail=str(e))
 
 @event_router.put("/events/update/{event_id}")
-def update_event(event_id: UUID,event: Event,token_data: dict = Depends(verify_token)):
+def update_event(event_id: str,event: Event,token_data: dict = Depends(verify_token)):
     """
     Update an existing event and replace its related speakers and agenda.
     Only the admin who created the event can update it.
@@ -118,7 +119,7 @@ def update_event(event_id: UUID,event: Event,token_data: dict = Depends(verify_t
     if not email:
         raise HTTPException(status_code=401, detail="Invalid token payload")
 
-    admin_resp = supabase.table("admnins").select("*").eq("email", email).limit(1).execute()
+    admin_resp = supabase.table("admins").select("*").eq("email", email).limit(1).execute()
     if not admin_resp.data or admin_resp.data[0]["role"] != "admin":
         raise HTTPException(status_code=403, detail="Admin privileges required")
 
