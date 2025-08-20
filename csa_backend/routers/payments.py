@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 from pydantic import BaseModel
 from dotenv import load_dotenv
+from config.settings import STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET
 
 # Import Supabase service
 from services.supabase_service import safe_supabase_operation
@@ -18,8 +19,8 @@ from db.supabase import get_supabase_client
 load_dotenv()
 
 # Configure Stripe
-stripe.api_key = os.getenv('STRIPE_SECRET_KEY')
-webhook_secret = os.getenv('STRIPE_WEBHOOK_SECRET')
+stripe.api_key = STRIPE_SECRET_KEY
+webhook_secret = STRIPE_WEBHOOK_SECRET
 
 # Initialize logger
 setup_logging()
