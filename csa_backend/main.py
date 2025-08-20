@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import asyncio
 # from indra_bot import WebContentProcessor
 from routes_register import router as api_router
+from routers.payments import payment_router
 from contextlib import asynccontextmanager
 from services.bot_service import initialize_website_content, initialize_sales_content, get_pinecone_index, load_hashes, check_for_updates, get_urls, check_index_stats
 # from backend.config.settings import PINECONE_API_KEY
@@ -78,8 +79,8 @@ async def lifespan(app: FastAPI):
         # Cleanup resources in finally block to ensure they run even on errors
         if hasattr(app.state, 'scheduler'):
             app.state.scheduler.shutdown()
-        if redis:
-            await redis.close()
+        if hasattr(app.state, 'redis'):
+            app.state.redis.close()     
         pass
 
 # Create the FastAPI app once
@@ -105,6 +106,10 @@ origins = [
     "http://127.0.0.1:5173",
     "https://csasfo.com"
 ]
+
+# Include routers
+app.include_router(api_router)
+app.include_router(payment_router, prefix="/api/v1")  # Add this line to include payments router
 
 # Add CORS middleware
 app.add_middleware(
