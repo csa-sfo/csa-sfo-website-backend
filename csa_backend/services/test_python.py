@@ -1,8 +1,8 @@
 import os
 
 
-OPENAI_API_KEY = os.getenv("OPENAIIND")
-PINECONE_API_KEY = os.getenv("PINECONEIND")
+OPENAI_API_KEY = os.getenv("CSA_OPENAI")
+PINECONE_API_KEY = os.getenv("CSA_PINECONE")
 
 print(f"PINECONE_API_KEY: {PINECONE_API_KEY}")
 print(f"OPENAI_API_KEY: {OPENAI_API_KEY}")

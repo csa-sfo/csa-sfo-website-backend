@@ -15,7 +15,7 @@ def send_contact_email(name: str, email: str, company: str = "", note: str = "")
         }
         
         # Use environment variable for contact endpoint
-        endpoint = os.getenv("CONTACT_ENDPOINT", "https://api.indrasol.com/contact")
+        endpoint = os.getenv("CSA_CONTACT_ENDPOINT", "https://api.indrasol.com/contact")
         
         response = requests.post(endpoint, json=data, timeout=10)
         response.raise_for_status()
