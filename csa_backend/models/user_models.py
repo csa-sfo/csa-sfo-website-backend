@@ -19,14 +19,14 @@ class SignupRequest(BaseModel):
     email: EmailStr
     password: str
     name: str
-    company_name: str
-    role: str
 
 class GoogleProfileRequest(BaseModel):
     email: EmailStr
     name: str
+
+class ExtraDetails(BaseModel):
     company_name: str
-    role: str
+    role: str  
 
 class SigninRequest(BaseModel):
     email: EmailStr      # Validated email format

@@ -3,7 +3,8 @@ from fastapi.responses import RedirectResponse
 from supabase import create_client, Client
 from models.user_models import SigninRequest, TokenRequest, TokenResponse
 from services.auth_services import verify_token, signin_user
-from models.user_models import SignupRequest, GoogleProfileRequest
+from models.user_models import SignupRequest, GoogleProfileRequest, ExtraDetails
+from datetime import datetime, timedelta
 import os, json, jwt, requests
 from fastapi import Depends
 import logging
@@ -25,6 +26,7 @@ PROVIDER = os.getenv("CSA_SUPABASE_GOOGLE_PROVIDER")  # service_role key recomme
 # JWT configuration
 JWT_SECRET_KEY = os.getenv("CSA_JWT_SECRET_KEY")  # Secret key used to encode/decode JWT tokens
 ALGORITHM = "HS256"  # JWT signing algorithm
+JWT_EXP_MINUTES = int(os.getenv("CSA_JWT_EXP_MINUTES", "60"))  # Default to 60 minutes if not set
 
 # Initialize Supabase client
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -211,7 +213,7 @@ def basic_login(data: SigninRequest):
         logger.error(f"Error during basic login for {data.email}: {e}")
         raise HTTPException(status_code=500, detail=f"Error during basic login for {data.email}: {e}")
     
-@auth_router.post("/signup")
+@auth_router.post("/signup/basic")
 def signup(data: SignupRequest):
     """
     Register user using Supabase Auth and store extended profile in 'users' table.
@@ -222,6 +224,7 @@ def signup(data: SignupRequest):
         # 1. Check if user already exists in users table
         user_check = supabase.table("users").select("id").eq("email", email_norm).execute()
         if user_check.data and len(user_check.data) > 0:
+            logger.info(f"User {email_norm} already exists in users table.")
             raise HTTPException(status_code=400, detail="User already exists in users table")
 
         # 2. Create user in Supabase Auth
@@ -231,26 +234,34 @@ def signup(data: SignupRequest):
             "email_confirm": True
         })
         if not new_auth_user or not new_auth_user.user:
+            logger.error(f"Failed to create user in auth.")
             raise HTTPException(status_code=500, detail="Failed to create user in auth")
 
         # 3. Insert into users table with additional details
         user_data = {
             "id": new_auth_user.user.id,
             "email": email_norm,
-            "company_name": data.company_name,
-            "role": data.role,
+            "name": data.name,
         }
         insert_response = supabase.table("users").upsert(user_data, on_conflict="email").execute()
 
         if not insert_response:
             # Rollback auth user to avoid orphan account
             supabase.auth.admin.delete_user(new_auth_user.user.id)
+            logger.error(f"Rollback successful for user {email_norm}.")
             raise HTTPException(status_code=500, detail="Failed to insert or update user in users table")
-        return {"message": "User created successfully", "user_id": new_auth_user.user.id}
 
-    except HTTPException as e:
-        raise e
+        # Generate JWT token with user_id inside
+        payload = {
+            "user_id": new_auth_user.user.id,
+            "aud": "authenticated",
+            "exp": datetime.utcnow() + timedelta(minutes=JWT_EXP_MINUTES)
+        }
+        token = jwt.encode(payload, JWT_SECRET_KEY, algorithm=ALGORITHM)
+        logger.info(f"Token generated for user {email_norm}")
+        return {"message": "Step 1 complete. Use this token for /signup/details.", "token": token}
     except Exception as e:
+        logger.exception(f"Signup failed: {e}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
     
 @auth_router.post("/google-profile")
@@ -258,31 +269,67 @@ def store_google_profile(data: GoogleProfileRequest):
     """
     Store extended user profile info after Google OAuth signup.
     """
-    logger.info(f"Storing Google profile for email: {data.email}")
-    # Check if already exists to avoid duplicates
+    logger.info(f"Google signup for {data.email}")
     try:
         existing = supabase.table("users").select("id").eq("email", data.email).limit(1).execute()
         if existing.data:
-            logger.info(f"User {data.email} already registered.")
-            return {"message": "User already registered"}
+            user_id = existing.data[0]["id"]
+            logger.info(f"User {data.email} already registered")
+        else:
+            # Insert basic info
+            profile = {
+                "email": data.email,
+                "name": data.name
+            }
+            resp = supabase.table("users").insert(profile).execute()
+            user_id = resp.data[0]["id"]
 
-        # Insert extended info
-        profile = {
+        # Generate JWT token
+        payload = {
+            "user_id": user_id,
             "email": data.email,
-            "name": data.name,
-            "company_name": data.company_name,
-            "role": data.role
+            "aud": "authenticated",
+            "exp": datetime.utcnow() + timedelta(minutes=JWT_EXP_MINUTES)
         }
+        token = jwt.encode(payload, JWT_SECRET_KEY, algorithm=ALGORITHM)
+        logger.info(f"Generated JWT token for user {data.email}")
+        return {"message": "Step 1 complete. Use this token for /signup/details.", "token": token}
 
-        response = supabase.table("users").insert(profile).execute()
-        if not response:
-            logger.error(f"Failed to insert Google profile: {response.error.message}")
-            raise HTTPException(status_code=500, detail="Failed to save Google profile")
-
-        return {"message": "Google signup profile saved",
-            "user": response.data[0]}
     except Exception as e:
-        logger.error(f"Error storing Google profile for {data.email}: {e}")
-        raise HTTPException(status_code=500, detail=f"Signup failed: {e}")    
+        logger.error(f"Google signup failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Signup failed: {e}")
+    
+@auth_router.post("/signup/details")
+def signup_details(data:ExtraDetails,token_data: dict = Depends(verify_token)):
+    """
+    Step 2: Add company and role for the user created in step 1.
+    """
+    logger.info("Adding signup details")
+    try:
+        # Extract token from "Bearer <token>"
+        user_id = token_data.get("user_id")
+        if not user_id:
+            logging.error("No user ID provided in token.")
+            raise HTTPException(status_code=401, detail="Invalid token")
+
+        # Update user with company and role
+        update_response = (
+            supabase.table("users")
+            .update({"company_name": data.company_name, "role": data.role})
+            .eq("id", user_id)
+            .execute()
+        )
+
+        if not update_response or len(update_response.data) == 0:
+            raise HTTPException(status_code=404, detail="User not found or update failed")
+        logger.info("Signup details added successfully.")
+        return {"message": "Signup completed successfully!"}
+
+    except Exception as e:
+        logger.exception(f"Error in signup_details: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+    
+
 
 
