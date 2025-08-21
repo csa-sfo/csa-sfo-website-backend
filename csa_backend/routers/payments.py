@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 from pydantic import BaseModel
 from dotenv import load_dotenv
-from config.settings import STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET
+from config.settings import STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, SUPABASE_URL
 
 # Import Supabase service
 from services.supabase_service import safe_supabase_operation
@@ -78,6 +78,8 @@ async def create_checkout_session(data: CreateCheckoutSession):
             allow_promotion_codes=False,
             billing_address_collection='auto',  # Changed from 'required' to 'auto' to be less restrictive
             submit_type='pay',
+            # Add logging to debug the session creation
+            expand=['line_items'],
         )
         
         logger.info(f"Created checkout session {session.id} for customer {customer.id}")
@@ -103,10 +105,15 @@ async def stripe_webhook(request: Request):
         logger.error("Webhook secret is not configured")
         return JSONResponse(status_code=400, content={"error": "Webhook secret not configured"})
     
+    if not sig_header:
+        logger.error("No stripe-signature header found")
+        return JSONResponse(status_code=400, content={"error": "No stripe-signature header"})
+    
     try:
         event = stripe.Webhook.construct_event(
             payload, sig_header, webhook_secret
         )
+        logger.info("Webhook signature verification successful")
     except ValueError as e:
         # Invalid payload
         logger.error(f"Invalid payload: {str(e)}")
@@ -123,10 +130,16 @@ async def stripe_webhook(request: Request):
     if event['type'] == 'checkout.session.completed':
         logger.info("Processing checkout.session.completed event")
         session = event['data']['object']
-        await handle_successful_payment(session)
+        try:
+            await handle_successful_payment(session)
+            logger.info("Successfully completed payment processing")
+        except Exception as e:
+            logger.error(f"Error in handle_successful_payment: {str(e)}")
+            # Don't raise the exception to avoid webhook failure
     else:
         logger.info(f"Unhandled event type: {event['type']}")
     
+    logger.info("=== WEBHOOK PROCESSING COMPLETE ===")
     return JSONResponse(status_code=200, content={"status": "success"})
 
 async def handle_successful_payment(session):
