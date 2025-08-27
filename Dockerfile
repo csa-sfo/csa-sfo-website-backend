@@ -21,7 +21,7 @@ RUN useradd --create-home --shell /bin/bash app \
 USER app
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
+HEALTHCHECK --interval=120s --timeout=30s --start-period=120s --retries=3 \
     CMD curl -f http://localhost:8000/docs || exit 1
 
 # gunicorn will listen on 8000 inside the container
