@@ -1,80 +1,99 @@
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from fastapi.responses import JSONResponse
 import asyncio
-from datetime import datetime
-# from indra_bot import WebContentProcessor
-from routes_register import router as api_router
-from routers.payments import payment_router
-from contextlib import asynccontextmanager
-from services.bot_service import initialize_website_content, initialize_sales_content, get_pinecone_index, load_hashes, check_for_updates, get_urls, check_index_stats
-# from backend.config.settings import PINECONE_API_KEY
-from apscheduler.schedulers.background import BackgroundScheduler   
+import time
 import logging
-from fastapi.responses import Response
+from datetime import datetime
+from app.config_simple import settings
+from contextlib import asynccontextmanager
+
+# Configure logging
+logging.basicConfig(
+    level=getattr(logging, settings.log_level),
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
+
+# Import routers with error handling
+try:
+    from routes_register import router as api_router
+    from routers.payments import payment_router
+    from services.bot_service import initialize_website_content, initialize_sales_content, get_pinecone_index, load_hashes, check_for_updates, get_urls, check_index_stats
+except ImportError as e:
+    logger.error(f"Failed to import required modules: {e}")
+    # Create empty routers if imports fail
+    from fastapi import APIRouter
+    api_router = APIRouter()
+    payment_router = APIRouter()
+    logger.warning("Using empty routers due to import failure")
+
+from apscheduler.schedulers.background import BackgroundScheduler   
 from services.sales_content_check import sales_content_changed
 import uvicorn
 
 from redis.asyncio import Redis
 from services.cache_service import init_redis_client
-from config.settings import REDIS_URL
-
-logging.basicConfig(level=logging.INFO)
 
 # Define lifespan manager first
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     try:
     # ========== REDIS CACHE INITIALIZATION ==========
-        # redis_url = REDIS_URL
-        # #logging.info(f"Connecting to Redis at {redis_url}")
-        # if not redis_url:
-        #     raise ValueError("REDIS_URL is not set in the environment variables.")
-        # try:
-        #     redis = Redis.from_url(redis_url, decode_responses=True)
-        #     init_redis_client(redis)
-        # except Exception as e:
-        #     logging.warning(f"Failed to connect to Redis: {e}. Continuing without Redis cache.")
-        #     redis = None
+        # Redis initialization
+        try:
+            redis = Redis.from_url(settings.redis_url, decode_responses=True)
+            init_redis_client(redis)
+            logger.info("Redis connected successfully")
+        except Exception as e:
+            logger.warning(f"Failed to connect to Redis: {e}. Continuing without Redis cache.")
+            redis = None
 
     
 
         global hashes
-        hashes = load_hashes()
-        index = get_pinecone_index()
-        stats = index.describe_index_stats()
-        website_count = stats["namespaces"].get("website", {}).get("vector_count", 0)
-        logging.info(f"Website vector count: {website_count}")
-        sales_count   = stats["namespaces"].get("sales",   {}).get("vector_count", 0)
-        logging.info(f"Vector count : {stats['total_vector_count']}")
-        if website_count == 0:
-            await initialize_website_content()
+        try:
+            hashes = load_hashes()
+            index = get_pinecone_index()
+            stats = index.describe_index_stats()
+            website_count = stats["namespaces"].get("website", {}).get("vector_count", 0)
+            logger.info(f"Website vector count: {website_count}")
+            sales_count   = stats["namespaces"].get("sales",   {}).get("vector_count", 0)
+            logger.info(f"Vector count : {stats['total_vector_count']}")
+            if website_count == 0:
+                await initialize_website_content()
+        except Exception as e:
+            logger.error(f"Failed to initialize Pinecone/OpenAI services: {e}")
+            logger.warning("Continuing without Pinecone/OpenAI services")
+            hashes = {}
         # if sales_count == 0:
         #     await initialize_sales_content()
         # if website_count == 0 and sales_count == 0:
-        #     logging.info("Initializing pinecone")
+        #     logger.info("Initializing pinecone")
         #     await initialize_website_content()
         #     await initialize_sales_content()
         # if await sales_content_changed():
-        #     logging.info("Sales content changed, refreshing...")
+        #     logger.info("Sales content changed, refreshing...")
         #     await initialize_sales_content()
         # Periodic refresh (async)
         async def refresh_task():
-            logging.info("Starting periodic refresh task...")
+            logger.info("Starting periodic refresh task...")
             while True:
-                logging.info("Sleeping for 24 hours before checking for updates...")
+                logger.info("Sleeping for 24 hours before checking for updates...")
                 await asyncio.sleep(86400)  # Wait 24 hours before each check
-                logging.info("Checking for updates...")
+                logger.info("Checking for updates...")
                 try:
                     await check_for_updates()
-                    logging.info("Update check completed successfully.")
+                    logger.info("Update check completed successfully.")
                 except Exception as e:
-                    logging.error(f"Error during periodic update check: {e}") 
+                    logger.error(f"Error during periodic update check: {e}") 
 
         loop = asyncio.get_event_loop()
         loop.create_task(refresh_task())
         yield
     except Exception as e:
-        logging.error(f"Error during lifespan startup: {e}")
+        logger.error(f"Error during lifespan startup: {e}")
         raise  # Re-raise if you want the app to fail on startup errors
     finally:
         # Cleanup resources in finally block to ensure they run even on errors
@@ -86,10 +105,13 @@ async def lifespan(app: FastAPI):
 
 # Create the FastAPI app once
 app = FastAPI(
-    title="CSA SFO Website Server",
+    title=settings.app_name,
     description="A web server for CSA SFO Website",
     version="1.0.0",
-    docs_url=f"/docs",
+    openapi_url=f"{settings.api_v1_str}/openapi.json",
+    docs_url=f"{settings.api_v1_str}/docs",
+    redoc_url=f"{settings.api_v1_str}/redoc",
+    debug=settings.debug,
     redirect_slashes=False,
     lifespan=lifespan
 )
@@ -119,6 +141,12 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],  # Allows all HTTP methods (GET, POST, etc.)
     allow_headers=["*"],  # Allows all headers
+)
+
+# Add trusted host middleware
+app.add_middleware(
+    TrustedHostMiddleware,
+    allowed_hosts=["*"]  # Configure this properly for production
 )
 
 # Custom middleware to handle OPTIONS requests
@@ -154,9 +182,18 @@ app.add_middleware(
 
 # @app.middleware("http")
 # async def log_requests(request: Request, call_next):
-#     logging.info(f"Request: {request.method} {request.url} Origin: {request.headers.get('origin')}")
+#     logger.info(f"Request: {request.method} {request.url} Origin: {request.headers.get('origin')}")
 #     response = await call_next(request)
 #     return response
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """Global exception handler"""
+    logger.error(f"Global exception: {exc}")
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error"}
+    )
 
 # Global bot instance
 # bot = WebContentProcessor()
@@ -193,5 +230,9 @@ async def debug_routes():
     
 if __name__ == "__main__":
     import uvicorn
-    # Run the server on port 5000 for local development
-    uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run(
+        "main:app",
+        host=settings.host,
+        port=settings.port,
+        reload=settings.debug
+    )

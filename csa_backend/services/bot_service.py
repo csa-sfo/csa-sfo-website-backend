@@ -14,7 +14,7 @@ import json
 import hashlib
 from pydantic import BaseModel
 import time
-from services.pinecone_service import store_documents,index,openai_client
+from services.pinecone_service import store_documents, get_pinecone_index, get_openai_client
 
 app = FastAPI()
 
@@ -41,12 +41,8 @@ PINECONE_API_KEY = os.getenv("CSA_PINECONE")
 hashes = {}
 
 
-# Initialize OpenAI
-def get_openai_client():
-    return openai_client
-
-def get_pinecone_index():
-    return index
+# OpenAI and Pinecone clients are now initialized lazily
+# No need to redefine these functions
 
 # Split content into smaller chunks
 async def split_content(content, chunk_size=500):

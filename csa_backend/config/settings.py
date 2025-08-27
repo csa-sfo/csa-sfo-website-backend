@@ -5,9 +5,13 @@ load_dotenv()
 
 # OpenAI Configuration
 OPENAI_API_KEY = os.getenv("CSA_OPENAI")
+if not OPENAI_API_KEY:
+    print("WARNING: CSA_OPENAI environment variable not set")
 
 # Pinecone Configuration
 PINECONE_API_KEY = os.getenv("CSA_PINECONE")
+if not PINECONE_API_KEY:
+    print("WARNING: CSA_PINECONE environment variable not set")
 
 # Supabase Configuration
 SUPABASE_URL = os.getenv("CSA_SUPABASE_URL")
