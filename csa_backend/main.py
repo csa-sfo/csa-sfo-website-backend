@@ -127,8 +127,8 @@ async def custom_cors_middleware(request: Request, call_next):
         origin = request.headers.get("origin")
         if origin in origins:
             response.headers["Access-Control-Allow-Origin"] = origin
-            response.headers["Access-Control-Allow-Methods"] = "POST, GET, OPTIONS"  # Specify methods or use "*"
-            response.headers["Access-Control-Allow-Headers"] = "content-type"  # Match requested headers or use "*"
+            response.headers["Access-Control-Allow-Methods"] = "POST, GET, OPTIONS"
+            response.headers["Access-Control-Allow-Headers"] = "content-type, authorization"
             response.headers["Access-Control-Allow-Credentials"] = "true"
         return response
     
@@ -137,7 +137,9 @@ async def custom_cors_middleware(request: Request, call_next):
     origin = request.headers.get("origin")
     if origin in origins:
         response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Vary"] = "Origin"
         response.headers["Access-Control-Allow-Credentials"] = "true"
+        response.headers["Access-Control-Allow-Headers"] = "content-type, authorization"
     return response
 
 # Apply the custom middleware
