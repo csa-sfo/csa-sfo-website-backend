@@ -122,41 +122,41 @@ app.add_middleware(
 )
 
 # Custom middleware to handle OPTIONS requests
-async def custom_cors_middleware(request: Request, call_next):
-    if request.method == "OPTIONS":
-        response = Response(status_code=200)
-        origin = request.headers.get("origin")
-        req_method = request.headers.get("access-control-request-method")
-        req_headers = request.headers.get("access-control-request-headers")
-        if origin in origins:
-            response.headers["Access-Control-Allow-Origin"] = origin
-            response.headers["Access-Control-Allow-Methods"] = req_method or "POST, GET, OPTIONS"
-            # Reflect requested headers to satisfy strict preflights
-            if req_headers:
-                response.headers["Access-Control-Allow-Headers"] = req_headers
-            else:
-                response.headers["Access-Control-Allow-Headers"] = "content-type, authorization"
-            response.headers["Access-Control-Allow-Credentials"] = "true"
-        return response
+# async def custom_cors_middleware(request: Request, call_next):
+#     if request.method == "OPTIONS":
+#         response = Response(status_code=200)
+#         origin = request.headers.get("origin")
+#         req_method = request.headers.get("access-control-request-method")
+#         req_headers = request.headers.get("access-control-request-headers")
+#         if origin in origins:
+#             response.headers["Access-Control-Allow-Origin"] = origin
+#             response.headers["Access-Control-Allow-Methods"] = req_method or "POST, GET, OPTIONS"
+#             # Reflect requested headers to satisfy strict preflights
+#             if req_headers:
+#                 response.headers["Access-Control-Allow-Headers"] = req_headers
+#             else:
+#                 response.headers["Access-Control-Allow-Headers"] = "content-type, authorization"
+#             response.headers["Access-Control-Allow-Credentials"] = "true"
+#         return response
     
-    # Process non-OPTIONS requests normally
-    response = await call_next(request)
-    origin = request.headers.get("origin")
-    if origin in origins:
-        response.headers["Access-Control-Allow-Origin"] = origin
-        response.headers["Vary"] = "Origin"
-        response.headers["Access-Control-Allow-Credentials"] = "true"
-        response.headers["Access-Control-Allow-Headers"] = "content-type, authorization"
-    return response
+#     # Process non-OPTIONS requests normally
+#     response = await call_next(request)
+#     origin = request.headers.get("origin")
+#     if origin in origins:
+#         response.headers["Access-Control-Allow-Origin"] = origin
+#         response.headers["Vary"] = "Origin"
+#         response.headers["Access-Control-Allow-Credentials"] = "true"
+#         response.headers["Access-Control-Allow-Headers"] = "content-type, authorization"
+#     return response
 
 # Apply the custom middleware
-app.middleware("http")(custom_cors_middleware)
+# app.middleware("http")(custom_cors_middleware)
 
-@app.middleware("http")
-async def log_requests(request: Request, call_next):
-    logging.info(f"Request: {request.method} {request.url} Origin: {request.headers.get('origin')}")
-    response = await call_next(request)
-    return response
+# @app.middleware("http")
+# async def log_requests(request: Request, call_next):
+#     logging.info(f"Request: {request.method} {request.url} Origin: {request.headers.get('origin')}")
+#     response = await call_next(request)
+#     return response
 
 # Global bot instance
 # bot = WebContentProcessor()
@@ -165,7 +165,7 @@ async def log_requests(request: Request, call_next):
 # startup_ran = False
 
 # List of URLs to process on startup
-urls = get_urls()
+# urls = get_urls()
 
 # Include API router
 app.include_router(api_router, prefix="/v1/routes")
