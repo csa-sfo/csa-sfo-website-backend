@@ -1,1 +1,0 @@
--r csa_backend/requirements.txt

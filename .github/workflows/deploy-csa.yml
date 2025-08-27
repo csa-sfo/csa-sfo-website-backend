@@ -53,7 +53,8 @@ jobs:
             --push \
             --tag $LOGIN_SERVER/${{ env.IMAGE_NAME }}:latest \
             --tag $LOGIN_SERVER/${{ env.IMAGE_NAME }}:${{ github.sha }} \
-            .
+            --file csa_backend/Dockerfile \
+            csa_backend/
 
       # 6) Deploy the new image to Azure Web App
       - name: "Deploy to Azure Web App"
