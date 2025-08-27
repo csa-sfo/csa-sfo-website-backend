@@ -150,7 +150,7 @@ async def custom_cors_middleware(request: Request, call_next):
     return response
 
 # Apply the custom middleware
-# app.middleware("http")(custom_cors_middleware)
+app.middleware("http")(custom_cors_middleware)
 
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
