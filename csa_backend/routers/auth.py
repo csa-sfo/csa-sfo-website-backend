@@ -7,6 +7,7 @@ from models.user_models import SignupRequest, GoogleProfileRequest, ExtraDetails
 from datetime import datetime, timedelta
 import os, json, jwt, requests
 from fastapi import Depends
+from dotenv import load_dotenv
 import logging
 
 auth_router = APIRouter()
@@ -14,6 +15,9 @@ auth_router = APIRouter()
 # Set up basic logging configuration (you can customize the format and level)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Load environment from .env if present
+load_dotenv()
 
 # Load environment variables for Supabase configuration and secrets
 SUPABASE_URL = os.getenv("CSA_SUPABASE_URL")
@@ -181,29 +185,38 @@ def basic_login(data: SigninRequest):
         logger.info(f"User '{user.email}' logged in successfully.")
 
         # Step 2: Check if the email belongs to an admin
-        admin_resp = supabase.table("admins").select("*").eq("email", user.email).limit(1).execute()
+        admin_resp = supabase.table("admins").select("id, email, name").eq("email", user.email).limit(1).execute()
         if admin_resp.data:
             logger.info(f"Authenticated user '{user.email}' is an admin.")
+            admin_row = admin_resp.data[0]
             return {
                 "access_token": result.session.access_token,
                 "refresh_token": result.session.refresh_token,
                 "user": {
-                    "id": user.id,
-                    "email": user.email,
-                    "type": "admin"
+                    "id": admin_row["id"],
+                    "email": admin_row["email"],
+                    "name": admin_row.get("name"),
+                    "type": "admin",
+                    "profile_completed": True
                 }
             }
         # Step 3: Check if the email belongs to a regular user
-        user_resp = supabase.table("users").select("*").eq("email", user.email).limit(1).execute()
+        user_resp = supabase.table("users").select("id, email, name, company_name, role").eq("email", user.email).limit(1).execute()
         if user_resp.data:
             logger.info(f"Authenticated user '{user.email}' is a regular user.")
+            row = user_resp.data[0]
+            profile_completed = bool(row.get("company_name") and row.get("role"))
             return {
                 "access_token": result.session.access_token,
                 "refresh_token": result.session.refresh_token,
                 "user": {
-                    "id": user.id,
-                    "email": user.email,
-                    "type": "user"
+                    "id": row["id"],
+                    "email": row["email"],
+                    "name": row.get("name"),
+                    "company_name": row.get("company_name"),
+                    "role": row.get("role"),
+                    "type": "user",
+                    "profile_completed": profile_completed
                 }
             }
         logger.warning(f"User {user.email} not found in admins or users tables.")
@@ -257,6 +270,9 @@ def signup(data: SignupRequest):
             "aud": "authenticated",
             "exp": datetime.utcnow() + timedelta(minutes=JWT_EXP_MINUTES)
         }
+        if not JWT_SECRET_KEY or not isinstance(JWT_SECRET_KEY, str) or JWT_SECRET_KEY.strip() == "":
+            logger.error("CSA_JWT_SECRET_KEY is not configured")
+            raise HTTPException(status_code=500, detail="Server misconfiguration: missing JWT secret")
         token = jwt.encode(payload, JWT_SECRET_KEY, algorithm=ALGORITHM)
         logger.info(f"Token generated for user {email_norm}")
         return {"message": "Step 1 complete. Use this token for /signup/details.", "token": token}
@@ -291,6 +307,9 @@ def store_google_profile(data: GoogleProfileRequest):
             "aud": "authenticated",
             "exp": datetime.utcnow() + timedelta(minutes=JWT_EXP_MINUTES)
         }
+        if not JWT_SECRET_KEY or not isinstance(JWT_SECRET_KEY, str) or JWT_SECRET_KEY.strip() == "":
+            logger.error("CSA_JWT_SECRET_KEY is not configured")
+            raise HTTPException(status_code=500, detail="Server misconfiguration: missing JWT secret")
         token = jwt.encode(payload, JWT_SECRET_KEY, algorithm=ALGORITHM)
         logger.info(f"Generated JWT token for user {data.email}")
         return {"message": "Step 1 complete. Use this token for /signup/details.", "token": token}
@@ -329,7 +348,41 @@ def signup_details(data:ExtraDetails,token_data: dict = Depends(verify_token)):
         logger.exception(f"Error in signup_details: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
-    
+@auth_router.post("/user/details")
+def update_user_details(data: ExtraDetails, authorization: str = Header(None)):
+    """
+    Update company_name and role for a logged-in user using the Supabase access token.
+    """
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Authorization header missing")
 
+    try:
+        scheme, token = authorization.split(" ")
+        if scheme.lower() != "bearer":
+            raise HTTPException(status_code=401, detail="Invalid auth scheme")
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid Authorization header")
 
+    try:
+        user_resp = supabase.auth.get_user(token)
+        auth_user = user_resp.user
+        if not auth_user:
+            raise HTTPException(status_code=401, detail="Invalid access token")
+    except Exception as e:
+        logger.error(f"Supabase token verification failed: {e}")
+        raise HTTPException(status_code=401, detail="Invalid access token")
+
+    try:
+        update_response = (
+            supabase.table("users")
+            .update({"company_name": data.company_name, "role": data.role})
+            .eq("id", auth_user.id)
+            .execute()
+        )
+        if not update_response or len(update_response.data) == 0:
+            raise HTTPException(status_code=404, detail="User not found or update failed")
+        return {"message": "Details updated successfully"}
+    except Exception as e:
+        logger.error(f"Failed to update user details: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
