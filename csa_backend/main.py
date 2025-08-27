@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 import asyncio
+from datetime import datetime
 # from indra_bot import WebContentProcessor
 from routes_register import router as api_router
 from routers.payments import payment_router
@@ -109,7 +110,6 @@ origins = [
 ]
 
 # Include routers
-app.include_router(api_router)
 app.include_router(payment_router, prefix="/api/v1")  # Add this line to include payments router
 
 # Add CORS middleware
@@ -169,3 +169,24 @@ app.add_middleware(
 
 # Include API router
 app.include_router(api_router, prefix="/v1/routes")
+
+# Debug routes for testing
+@app.get("/")
+async def root():
+    return {"message": "CSA SFO Website Server is running!", "status": "healthy"}
+
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
+
+@app.get("/debug/routes")
+async def debug_routes():
+    routes = []
+    for route in app.routes:
+        if hasattr(route, 'methods'):
+            routes.append({
+                "path": route.path,
+                "methods": list(route.methods),
+                "name": getattr(route, 'name', 'Unknown')
+            })
+    return {"routes": routes, "total_routes": len(routes)}
