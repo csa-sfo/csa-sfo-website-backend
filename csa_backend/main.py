@@ -126,10 +126,16 @@ async def custom_cors_middleware(request: Request, call_next):
     if request.method == "OPTIONS":
         response = Response(status_code=200)
         origin = request.headers.get("origin")
+        req_method = request.headers.get("access-control-request-method")
+        req_headers = request.headers.get("access-control-request-headers")
         if origin in origins:
             response.headers["Access-Control-Allow-Origin"] = origin
-            response.headers["Access-Control-Allow-Methods"] = "POST, GET, OPTIONS"
-            response.headers["Access-Control-Allow-Headers"] = "content-type, authorization"
+            response.headers["Access-Control-Allow-Methods"] = req_method or "POST, GET, OPTIONS"
+            # Reflect requested headers to satisfy strict preflights
+            if req_headers:
+                response.headers["Access-Control-Allow-Headers"] = req_headers
+            else:
+                response.headers["Access-Control-Allow-Headers"] = "content-type, authorization"
             response.headers["Access-Control-Allow-Credentials"] = "true"
         return response
     
