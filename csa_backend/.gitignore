@@ -5,3 +5,17 @@ __pycache__/
 #.env
 backend/.env
 .web_content/
+venv311_new/
+venv_fresh/
+venv_new/
+venv/
+venv311/
+
+# Python virtual environments
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+pip-log.txt
+pip-delete-this-directory.txt
