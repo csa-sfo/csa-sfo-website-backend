@@ -1,0 +1,29 @@
+# Python virtual environments
+venv/
+venv_fresh/
+venv_new/
+venv311/
+venv311_new/
+.venv/
+
+# Python cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
