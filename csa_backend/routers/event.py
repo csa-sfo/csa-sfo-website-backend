@@ -44,7 +44,7 @@ def create_event(event: Event, token_data: dict = Depends(verify_token)):
 
     # Validate admin
     admin_check = supabase.table("admins").select("*").eq("email", email).limit(1).execute()
-    if not admin_check.data or admin_check.data[0]["role"] != "admin":
+    if not admin_check.data:
         raise HTTPException(status_code=403, detail="Not authorized")
 
     admin_id = admin_check.data[0]["id"]
@@ -120,13 +120,13 @@ def update_event(event_id: str,event: Event,token_data: dict = Depends(verify_to
         raise HTTPException(status_code=401, detail="Invalid token payload")
 
     admin_resp = supabase.table("admins").select("*").eq("email", email).limit(1).execute()
-    if not admin_resp.data or admin_resp.data[0]["role"] != "admin":
+    if not admin_resp.data:
         raise HTTPException(status_code=403, detail="Admin privileges required")
 
     admin_id = admin_resp.data[0]["id"]
 
     # Verify event exists
-    event_resp = supabase.table("events").select("*").eq("id", str(event_id)).eq("admin_id", admin_id).limit(1).execute()
+    event_resp = supabase.table("events").select("*").eq("id", str(event_id)).limit(1).execute()
     if not event_resp.data:
         raise HTTPException(status_code=404, detail="Event not found or unauthorized")
 
@@ -214,7 +214,7 @@ def delete_event(event_id: str, token_data: dict = Depends(verify_token)):
     return {"message": "Event deleted successfully"}
 
 @event_router.get("/events/all")
-def get_all_events(token_data: dict = Depends(verify_token)):
+def get_all_events():
     """
     Retrieve all events including their associated speakers and agenda items.
     """
