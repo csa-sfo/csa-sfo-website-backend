@@ -395,9 +395,9 @@ def basic_login(token_data: dict = Depends(verify_token)):
             row = user_resp.data[0]
             profile_completed = bool(row.get("company_name") and row.get("role"))
             return {"profile_completed": profile_completed}
-        logger.warning(f"User {token_data.get("email")} not found in users tables.")
+        logger.warning(f"User {token_data.get('email')} not found in users tables.")
         raise HTTPException(status_code=403, detail="Unauthorized user")
 
     except Exception as e:
-        logger.error(f"Error during basic login for {token_data.get("email")}: {e}")
-        raise HTTPException(status_code=500, detail=f"Error during basic login for {token_data.get("email")}: {e}")
+        logger.error(f"Error during basic login for {token_data.get('email')}: {e}")
+        raise HTTPException(status_code=500, detail=f"Error during basic login for {token_data.get('email')}: {e}")
