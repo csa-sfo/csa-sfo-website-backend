@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, status,Path
 from models.event_models import Event
 from models.event_models import AgendaItem
 from models.event_models import Speaker
+from pydantic import BaseModel
 from services.auth_services import verify_token
 from fastapi.security import OAuth2PasswordBearer
 from typing import Optional, List
@@ -239,10 +240,41 @@ def get_all_events():
     except Exception as e:
         logging.error(f"Error fetching events: {e}")
         raise HTTPException(status_code=500, detail=f"Error fetching events: {e}")
-    
+
 def _is_valid_uuid(val: str) -> bool:
     try:
         uuid_obj = UUID(val, version=4)  # You can specify version if needed
         return str(uuid_obj) == val
     except (ValueError, AttributeError, TypeError):
         return False
+        
+@event_router.get("/events/{event_id}")
+def get_event_by_id(event_id: str):
+    """
+    Retrieve a specific event by ID including speakers and agenda items.
+    """
+    try:
+        # Get the event
+        event_response = supabase.table("events").select("*").eq("id", event_id).execute()
+        if not event_response.data:
+            raise HTTPException(status_code=404, detail="Event not found")
+        
+        event = event_response.data[0]
+        
+        # Get speakers for this event
+        speaker_response = supabase.table("event_speakers").select("*").eq("event_id", event_id).execute()
+        event["speakers"] = speaker_response.data if speaker_response.data else []
+        
+        # Get agenda for this event
+        agenda_response = supabase.table("event_agenda").select("*").eq("event_id", event_id).execute()
+        event["agenda"] = agenda_response.data if agenda_response.data else []
+        
+        return event
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error fetching event {event_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Error fetching event: {e}")
+    
+
