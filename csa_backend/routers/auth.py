@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException, Request, Header
 from fastapi.responses import RedirectResponse
 from supabase import create_client, Client
 from models.user_models import SigninRequest, TokenRequest, TokenResponse
-from services.auth_services import verify_token, signin_user
+from services.auth_services import verify_token, signin_user, get_admin_by_email, generate_admin_token, verify_admin_token
 from models.user_models import SignupRequest, GoogleProfileRequest, ExtraDetails
 from datetime import datetime, timedelta
 import os, json, jwt, requests
@@ -122,6 +122,120 @@ def google_callback(request: Request):
             logger.warning(f"User {user.email} not found in either table.")
             raise HTTPException(status_code=403, detail="Unauthorized user")
     
+@auth_router.post("/admin/check")
+def check_admin_by_email(data: dict):
+    """
+    Check if an email belongs to an admin and generate admin token if found.
+    Used by OTP login to determine user role and provide admin token.
+    """
+    try:
+        email = data.get("email")
+        if not email:
+            return {"is_admin": False}
+        
+        logger.info(f"Checking admin status for email: {email}")
+        
+        # Use the service function to get admin data
+        admin_data = get_admin_by_email(email)
+        
+        if admin_data:
+            logger.info(f"Email {email} belongs to admin: {admin_data['name']}")
+            
+            # Generate admin token
+            admin_token = generate_admin_token(admin_data)
+            
+            return {
+                "is_admin": True,
+                "admin": {
+                    "id": admin_data["id"],
+                    "email": admin_data["email"],
+                    "name": admin_data["name"]
+                },
+                "admin_token": admin_token
+            }
+        else:
+            logger.info(f"Email {email} is not an admin")
+            return {"is_admin": False}
+            
+    except Exception as e:
+        logger.error(f"Error checking admin status for {email}: {e}")
+        raise HTTPException(status_code=500, detail=f"Error checking admin status: {e}")
+
+@auth_router.post("/user/role")
+def get_user_role(token_data: dict = Depends(verify_token)):
+    """
+    Get user role based on JWT token.
+    Returns user role information from database.
+    """
+    try:
+        user_id = token_data.get("user_id")
+        email = token_data.get("email")
+        
+        if not user_id or not email:
+            raise HTTPException(status_code=400, detail="Invalid token payload")
+        
+        logger.info(f"Getting role for user: {email}")
+        
+        # Check if user is an admin
+        admin_data = get_admin_by_email(email)
+        if admin_data:
+            logger.info(f"User {email} is an admin")
+            return {
+                "role": "admin",
+                "user_id": admin_data["id"],
+                "email": admin_data["email"],
+                "name": admin_data["name"]
+            }
+        
+        # Check if user is a regular user
+        try:
+            user_result = supabase.table("users").select("id, name, email, company_name, role").eq("email", email).limit(1).execute()
+            if user_result.data:
+                user = user_result.data[0]
+                logger.info(f"User {email} is a regular user")
+                return {
+                    "role": "user",
+                    "user_id": user["id"],
+                    "email": user["email"],
+                    "name": user.get("name"),
+                    "company_name": user.get("company_name"),
+                    "job_role": user.get("role")
+                }
+        except Exception as e:
+            logger.error(f"Error checking users table for {email}: {e}")
+        
+        # User not found in either table
+        logger.warning(f"User {email} not found in admins or users tables")
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting user role for {email}: {e}")
+        raise HTTPException(status_code=500, detail="Error getting user role")
+
+@auth_router.post("/admin/verify")
+def verify_admin_token_endpoint(payload: dict = Depends(verify_admin_token)):
+    """
+    Verify admin JWT token and return admin information.
+    """
+    try:
+        logger.info(f"Admin token verification for: {payload.get('email')}")
+        
+        return {
+            "status": "ok",
+            "admin": {
+                "id": payload.get("admin_id"),
+                "email": payload.get("email"),
+                "name": payload.get("name"),
+                "role": payload.get("role")
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Error during admin token verification: {e}")
+        raise HTTPException(status_code=500, detail="Token verification failed")
+
 @auth_router.post("/auth/verify-admin")
 def verify_admin(payload: dict = Depends(verify_token)):
     """
@@ -164,6 +278,7 @@ def verify_admin(payload: dict = Depends(verify_token)):
     return {
         "status": "ok"
     }
+
 
 @auth_router.post("/login")
 def basic_login(data: SigninRequest):
@@ -264,9 +379,10 @@ def signup(data: SignupRequest):
             logger.error(f"Rollback successful for user {email_norm}.")
             raise HTTPException(status_code=500, detail="Failed to insert or update user in users table")
 
-        # Generate JWT token with user_id inside
+        # Generate JWT token with minimal information for security
         payload = {
             "user_id": new_auth_user.user.id,
+            "email": email_norm,
             "aud": "authenticated",
             "exp": datetime.utcnow() + timedelta(minutes=JWT_EXP_MINUTES)
         }
@@ -300,7 +416,7 @@ def store_google_profile(data: GoogleProfileRequest):
             resp = supabase.table("users").insert(profile).execute()
             user_id = resp.data[0]["id"]
 
-        # Generate JWT token
+        # Generate JWT token with minimal information for security
         payload = {
             "user_id": user_id,
             "email": data.email,
