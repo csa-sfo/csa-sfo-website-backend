@@ -4,7 +4,7 @@ from models.event_models import Event
 from models.event_models import AgendaItem
 from models.event_models import Speaker
 from pydantic import BaseModel
-from services.auth_services import verify_token
+from services.auth_services import verify_token, get_admin_by_email
 from fastapi.security import OAuth2PasswordBearer
 from typing import Optional, List
 from datetime import datetime
@@ -43,12 +43,13 @@ def create_event(event: Event, token_data: dict = Depends(verify_token)):
     if not email:
         raise HTTPException(status_code=401, detail="Invalid token payload")
 
-    # Validate admin
-    admin_check = supabase.table("admins").select("*").eq("email", email).limit(1).execute()
-    if not admin_check.data:
-        raise HTTPException(status_code=403, detail="Not authorized")
+    # Use secure admin verification function
+    admin_data = get_admin_by_email(email)
+    if not admin_data:
+        raise HTTPException(status_code=403, detail="Not authorized - admin access required")
 
-    admin_id = admin_check.data[0]["id"]
+    admin_id = admin_data["id"]
+    logging.info(f"Event creation authorized for admin: {admin_data['name']}")
 
     try:
         # Insert event into database
@@ -68,6 +69,9 @@ def create_event(event: Event, token_data: dict = Depends(verify_token)):
             "poster_url": event.poster_url,
             "admin_id": admin_id,
         }).execute()
+
+        if not event_response.data:
+            raise HTTPException(status_code=500, detail="Failed to create event")
 
         event_id = event_response.data[0]["id"]
 
@@ -99,8 +103,16 @@ def create_event(event: Event, token_data: dict = Depends(verify_token)):
         if agenda_item_payload:
             supabase.table("event_agenda").insert(agenda_item_payload).execute()
 
-        logging.info(f"Event created: {event_id}")
-        return {"message": "Event created successfully", "event_id": event_id}
+        logging.info(f"Event created successfully: {event_id}")
+        return {
+            "message": "Event created successfully", 
+            "event_id": event_id,
+            "admin": {
+                "id": admin_data["id"],
+                "name": admin_data["name"],
+                "email": admin_data["email"]
+            }
+        }
 
     except Exception as e:
         logging.error(f"Error creating event: {e}")
@@ -141,35 +153,40 @@ def update_event(event_id: str,event: Event,token_data: dict = Depends(verify_to
         # Update main event data
         supabase.table("events").update(update_data).eq("id", str(event_id)).execute()
 
-        # Remove existing related data
-        supabase.table("event_speakers").delete().eq("event_id", str(event_id)).execute()
-        supabase.table("event_agenda").delete().eq("event_id", str(event_id)).execute()
+        # Only update speakers and agenda if they are provided
+        if hasattr(event, 'speakers') and event.speakers is not None:
+            # Remove existing speakers
+            supabase.table("event_speakers").delete().eq("event_id", str(event_id)).execute()
+            
+            # Insert new speakers (only if there are any)
+            if event.speakers:
+                speakers_payload = [
+                    {
+                        "name": s.name,
+                        "role": s.role,
+                        "company": s.company,
+                        "image_url": s.image_url,
+                        "about": s.about,
+                        "event_id": str(event_id)
+                    } for s in event.speakers
+                ]
+                supabase.table("event_speakers").insert(speakers_payload).execute()
 
-        # Re-insert new speakers
-        speakers_payload = [
-            {
-                "name": s.name,
-                "role": s.role,
-                "company": s.company,
-                "image_url": s.image_url,
-                "about": s.about,
-                "event_id": str(event_id)
-            } for s in event.speakers
-        ]
-        if speakers_payload:
-            supabase.table("event_speakers").insert(speakers_payload).execute()
-
-        # Re-insert new agenda items
-        agenda_payload = [
-            {
-                "duration": a.duration,
-                "topic": a.topic,
-                "description": a.description,
-                "event_id": str(event_id)
-            } for a in event.agenda
-        ]
-        if agenda_payload:
-            supabase.table("event_agenda").insert(agenda_payload).execute()
+        if hasattr(event, 'agenda') and event.agenda is not None:
+            # Remove existing agenda items
+            supabase.table("event_agenda").delete().eq("event_id", str(event_id)).execute()
+            
+            # Insert new agenda items (only if there are any)
+            if event.agenda:
+                agenda_payload = [
+                    {
+                        "duration": a.duration,
+                        "topic": a.topic,
+                        "description": a.description,
+                        "event_id": str(event_id)
+                    } for a in event.agenda
+                ]
+                supabase.table("event_agenda").insert(agenda_payload).execute()
 
         logging.info(f"Event {event_id} updated")
         return {"message": "Event updated successfully", "event_id": str(event_id)}
@@ -215,31 +232,128 @@ def delete_event(event_id: str, token_data: dict = Depends(verify_token)):
     return {"message": "Event deleted successfully"}
 
 @event_router.get("/events/all")
-def get_all_events():
+def get_all_events(token_data: dict = Depends(verify_token)):
     """
-    Retrieve all events including their associated speakers and agenda items.
+    Get all events with their speakers and agenda items.
+    Only admins can access this endpoint.
     """
     try:
-        events_response = supabase.table("events").select("*").execute()
+        email = token_data.get("email")
+        if not email:
+            raise HTTPException(status_code=401, detail="Invalid token payload")
+
+        # Verify admin access
+        admin_data = get_admin_by_email(email)
+        if not admin_data:
+            raise HTTPException(status_code=403, detail="Not authorized - admin access required")
+
+        logging.info(f"Fetching all events for admin: {admin_data['name']}")
+
+        # Get all events first (limit to recent events for better performance)
+        events_response = supabase.table("events").select("*").order("date_time", desc=True).limit(50).execute()
+        
         if not events_response.data:
             return {"events": []}
 
-        events = events_response.data
-
-        for event in events:
+        # Get event IDs for efficient filtering
+        event_ids = [event["id"] for event in events_response.data]
+        
+        # Get speakers for only these events
+        speakers_response = supabase.table("event_speakers").select("*").in_("event_id", event_ids).execute()
+        speakers = speakers_response.data if speakers_response.data else []
+        
+        # Get agenda items for only these events
+        agenda_response = supabase.table("event_agenda").select("*").in_("event_id", event_ids).execute()
+        agenda_items = agenda_response.data if agenda_response.data else []
+        
+        # Group speakers and agenda by event_id for efficient lookup
+        speakers_by_event = {}
+        for speaker in speakers:
+            event_id = speaker["event_id"]
+            if event_id not in speakers_by_event:
+                speakers_by_event[event_id] = []
+            speakers_by_event[event_id].append(speaker)
+        
+        agenda_by_event = {}
+        for agenda_item in agenda_items:
+            event_id = agenda_item["event_id"]
+            if event_id not in agenda_by_event:
+                agenda_by_event[event_id] = []
+            agenda_by_event[event_id].append(agenda_item)
+        
+        # Combine events with their speakers and agenda
+        events = []
+        for event in events_response.data:
             event_id = event["id"]
+            event["speakers"] = speakers_by_event.get(event_id, [])
+            event["agenda"] = agenda_by_event.get(event_id, [])
+            events.append(event)
 
-            speaker_response = supabase.table("event_speakers").select("*").eq("event_id", event_id).execute()
-            agenda_response = supabase.table("event_agenda").select("*").eq("event_id", event_id).execute()
+        logging.info(f"Successfully fetched {len(events)} events")
+        return {"events": events}
 
-            event["speakers"] = speaker_response.data if speaker_response.data else []
-            event["agenda"] = agenda_response.data if agenda_response.data else []
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error fetching all events: {e}")
+        raise HTTPException(status_code=500, detail=f"Error fetching events: {e}")
 
+@event_router.get("/events/public")
+def get_public_events():
+    """
+    Get all events with their speakers and agenda items for public access.
+    No authentication required.
+    """
+    try:
+        logging.info("Fetching public events")
+
+        # Get all events first (limit to recent events for better performance)
+        events_response = supabase.table("events").select("*").order("date_time", desc=True).limit(50).execute()
+        
+        if not events_response.data:
+            return {"events": []}
+
+        # Get event IDs for efficient filtering
+        event_ids = [event["id"] for event in events_response.data]
+        
+        # Get speakers for only these events
+        speakers_response = supabase.table("event_speakers").select("*").in_("event_id", event_ids).execute()
+        speakers = speakers_response.data if speakers_response.data else []
+        
+        # Get agenda items for only these events
+        agenda_response = supabase.table("event_agenda").select("*").in_("event_id", event_ids).execute()
+        agenda_items = agenda_response.data if agenda_response.data else []
+        
+        # Group speakers and agenda by event_id for efficient lookup
+        speakers_by_event = {}
+        for speaker in speakers:
+            event_id = speaker["event_id"]
+            if event_id not in speakers_by_event:
+                speakers_by_event[event_id] = []
+            speakers_by_event[event_id].append(speaker)
+        
+        agenda_by_event = {}
+        for agenda_item in agenda_items:
+            event_id = agenda_item["event_id"]
+            if event_id not in agenda_by_event:
+                agenda_by_event[event_id] = []
+            agenda_by_event[event_id].append(agenda_item)
+        
+        # Combine events with their speakers and agenda
+        events = []
+        for event in events_response.data:
+            event_id = event["id"]
+            event["speakers"] = speakers_by_event.get(event_id, [])
+            event["agenda"] = agenda_by_event.get(event_id, [])
+            events.append(event)
+
+        logging.info(f"Successfully fetched {len(events)} public events")
         return {"events": events}
 
     except Exception as e:
-        logging.error(f"Error fetching events: {e}")
+        logging.error(f"Error fetching public events: {e}")
         raise HTTPException(status_code=500, detail=f"Error fetching events: {e}")
+
 
 def _is_valid_uuid(val: str) -> bool:
     try:
@@ -276,5 +390,4 @@ def get_event_by_id(event_id: str):
     except Exception as e:
         logging.error(f"Error fetching event {event_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Error fetching event: {e}")
-    
 

@@ -39,9 +39,11 @@ async def create_event_registration(registration: EventRegistrationRequest):
     try:
         supabase = get_supabase_client()
         
-        # Validate user exists
+        # Validate user exists in either users or admins table
         user_response = supabase.table("users").select("id, email").eq("id", registration.user_id).limit(1).execute()
-        if not user_response.data:
+        admin_response = supabase.table("admins").select("id, email").eq("id", registration.user_id).limit(1).execute()
+        
+        if not user_response.data and not admin_response.data:
             raise HTTPException(status_code=404, detail="User not found")
         
         # Validate event exists
@@ -104,9 +106,11 @@ async def get_user_registrations(user_id: str):
     try:
         supabase = get_supabase_client()
         
-        # Validate user exists
+        # Validate user exists in either users or admins table
         user_response = supabase.table("users").select("id").eq("id", user_id).limit(1).execute()
-        if not user_response.data:
+        admin_response = supabase.table("admins").select("id").eq("id", user_id).limit(1).execute()
+        
+        if not user_response.data and not admin_response.data:
             raise HTTPException(status_code=404, detail="User not found")
         
         # Get user's registrations with event details
@@ -177,6 +181,25 @@ async def simple_event_registration(registration: EventRegistrationRequest):
     try:
         supabase = get_supabase_client()
         
+        # Get event details first
+        event_response = supabase.table("events").select("id, attendees, capacity").eq("id", registration.event_id).limit(1).execute()
+        if not event_response.data:
+            raise HTTPException(status_code=404, detail="Event not found")
+        
+        event_data = event_response.data[0]
+        
+        # Check if user is already registered
+        existing_registration = supabase.table("event_registrations").select("id").eq(
+            "user_id", registration.user_id
+        ).eq("event_id", registration.event_id).limit(1).execute()
+        
+        if existing_registration.data:
+            raise HTTPException(status_code=400, detail="User already registered for this event")
+        
+        # Check if event is at capacity
+        if event_data["attendees"] >= event_data["capacity"]:
+            raise HTTPException(status_code=400, detail="Event is at full capacity")
+        
         # Create new registration
         registration_response = supabase.table("event_registrations").insert({
             "user_id": registration.user_id,
@@ -185,6 +208,12 @@ async def simple_event_registration(registration: EventRegistrationRequest):
         
         if not registration_response.data:
             raise HTTPException(status_code=500, detail="Failed to create registration")
+        
+        # Update event attendees count
+        new_attendees = event_data["attendees"] + 1
+        supabase.table("events").update({
+            "attendees": new_attendees
+        }).eq("id", registration.event_id).execute()
         
         registration_id = registration_response.data[0]["id"]
         
@@ -196,6 +225,8 @@ async def simple_event_registration(registration: EventRegistrationRequest):
             "message": "Test registration successful"
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
         logging.error(f"Error in test registration: {e}")
         raise HTTPException(status_code=500, detail=f"Test registration failed: {str(e)}")
@@ -215,15 +246,12 @@ async def get_event_attendees(event_id: str):
         
         event = event_response.data[0]
         
-        # Get actual registration count
-        reg_response = supabase.table("event_registrations").select("id", count="exact").eq("event_id", event_id).execute()
-        actual_attendees = reg_response.count or 0
-        
+        # Return the attendees count from events table (which is kept up-to-date by registrations)
         return {
             "event_id": event_id,
-            "attendees": actual_attendees,
+            "attendees": event["attendees"],
             "capacity": event["capacity"],
-            "spots_left": event["capacity"] - actual_attendees
+            "spots_left": event["capacity"] - event["attendees"]
         }
         
     except HTTPException:
