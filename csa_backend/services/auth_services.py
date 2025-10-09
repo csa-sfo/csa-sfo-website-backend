@@ -74,6 +74,7 @@ def generate_admin_token(admin_data: dict):
         payload = {
             "user_id": admin_data["id"],  # Use user_id instead of admin_id for consistency
             "email": admin_data["email"],
+            "role": "admin",  # Add role field for admin verification
             "aud": "authenticated",
             "exp": datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
         }
