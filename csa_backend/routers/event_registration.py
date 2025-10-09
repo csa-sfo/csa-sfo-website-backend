@@ -260,6 +260,77 @@ async def get_event_attendees(event_id: str):
         logging.error(f"Error getting event attendees: {e}")
         raise HTTPException(status_code=500, detail=f"Error getting attendees: {e}")
 
+@event_registration_router.get("/event-registered-users/{event_id}")
+async def get_event_registered_users(event_id: str):
+    """
+    Get all registered users for a specific event with their details.
+    """
+    try:
+        supabase = get_supabase_client()
+        
+        # Get event details to verify it exists
+        event_response = supabase.table("events").select("id, title").eq("id", event_id).execute()
+        if not event_response.data:
+            raise HTTPException(status_code=404, detail="Event not found")
+        
+        # Get all registrations for this event
+        registrations_response = supabase.table("event_registrations").select("user_id, updated_at").eq("event_id", event_id).execute()
+        
+        if not registrations_response.data:
+            return {
+                "event_id": event_id,
+                "registered_users": [],
+                "count": 0
+            }
+        
+        # Get user details for each registration
+        user_ids = [reg["user_id"] for reg in registrations_response.data]
+        
+        # Fetch users from users table
+        users_response = supabase.table("users").select("id, name, email, company_name, role, avatar_url").in_("id", user_ids).execute()
+        users = users_response.data if users_response.data else []
+        
+        # Also check admins table in case any admins registered
+        admins_response = supabase.table("admins").select("id, name, email").in_("id", user_ids).execute()
+        admins = admins_response.data if admins_response.data else []
+        
+        # Combine users and admins, adding a type field
+        all_users = []
+        for user in users:
+            user["user_type"] = "user"
+            all_users.append(user)
+        
+        for admin in admins:
+            admin["user_type"] = "admin"
+            admin["company_name"] = "CSA Admin"
+            admin["role"] = "Administrator"
+            admin["avatar_url"] = None
+            all_users.append(admin)
+        
+        # Create a map of user details by ID
+        user_map = {user["id"]: user for user in all_users}
+        
+        # Combine registration data with user details
+        registered_users = []
+        for reg in registrations_response.data:
+            user_id = reg["user_id"]
+            if user_id in user_map:
+                user_data = user_map[user_id].copy()
+                user_data["registered_at"] = reg.get("updated_at", "")
+                registered_users.append(user_data)
+        
+        return {
+            "event_id": event_id,
+            "registered_users": registered_users,
+            "count": len(registered_users)
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error getting registered users for event: {e}")
+        raise HTTPException(status_code=500, detail=f"Error getting registered users: {e}")
+
 @event_registration_router.get("/debug/event-registrations")
 async def debug_event_registrations():
     """

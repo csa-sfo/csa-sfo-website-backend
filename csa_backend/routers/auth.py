@@ -517,3 +517,78 @@ def basic_login(token_data: dict = Depends(verify_token)):
     except Exception as e:
         logger.error(f"Error during basic login for {token_data.get('email')}: {e}")
         raise HTTPException(status_code=500, detail=f"Error during basic login for {token_data.get('email')}: {e}")
+
+
+@auth_router.get("/users/all")
+def get_all_users(token_data: dict = Depends(verify_admin_token)):
+    """
+    Fetch all users from the users table with their event registrations.
+    Only accessible by admin users.
+    """
+    try:
+        email = token_data.get("email")
+        logger.info(f"Admin {email} is fetching all users")
+        
+        # Fetch all users from users table
+        users_resp = supabase.table("users").select("id, email, name, company_name, role, provider, linkedin_id, headline, avatar_url, created_at, last_login").order("created_at", desc=True).execute()
+        
+        if not users_resp.data:
+            logger.info("No users found in users table")
+            return {"users": [], "count": 0}
+        
+        # For each user, fetch their event registrations
+        users_with_registrations = []
+        for user in users_resp.data:
+            try:
+                # Fetch event registrations for this user
+                registrations_resp = supabase.table("event_registrations").select(
+                    "id, event_id, events(title, slug, date_time)"
+                ).eq("user_id", user["id"]).execute()
+                
+                # Add registrations to user object
+                user["registrations"] = registrations_resp.data if registrations_resp.data else []
+                user["registration_count"] = len(registrations_resp.data) if registrations_resp.data else 0
+                
+            except Exception as reg_error:
+                logger.warning(f"Error fetching registrations for user {user['id']}: {reg_error}")
+                user["registrations"] = []
+                user["registration_count"] = 0
+            
+            users_with_registrations.append(user)
+        
+        logger.info(f"Successfully fetched {len(users_with_registrations)} users with registrations")
+        return {"users": users_with_registrations, "count": len(users_with_registrations)}
+            
+    except Exception as e:
+        logger.error(f"Error fetching all users: {e}")
+        raise HTTPException(status_code=500, detail=f"Error fetching users: {str(e)}")
+
+
+@auth_router.get("/check-email/{email}")
+async def check_email_exists(email: str):
+    """
+    Check if an email exists in the system (users or admins table).
+    Returns exists: true/false and user_type: 'user', 'admin', or null
+    """
+    try:
+        email_norm = email.lower().strip()
+        logger.info(f"Checking if email exists: {email_norm}")
+        
+        # Check in admins table first
+        admin_check = supabase.table("admins").select("id, email").eq("email", email_norm).execute()
+        if admin_check.data and len(admin_check.data) > 0:
+            logger.info(f"Email {email_norm} found in admins table")
+            return {"exists": True, "user_type": "admin"}
+        
+        # Check in users table
+        user_check = supabase.table("users").select("id, email").eq("email", email_norm).execute()
+        if user_check.data and len(user_check.data) > 0:
+            logger.info(f"Email {email_norm} found in users table")
+            return {"exists": True, "user_type": "user"}
+        
+        logger.info(f"Email {email_norm} not found in system")
+        return {"exists": False, "user_type": None}
+        
+    except Exception as e:
+        logger.error(f"Error checking email existence: {e}")
+        raise HTTPException(status_code=500, detail=f"Error checking email: {str(e)}")
