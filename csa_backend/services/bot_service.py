@@ -1,6 +1,5 @@
 from fastapi import FastAPI, Request
 from openai import OpenAI
-from pinecone import Pinecone, ServerlessSpec
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
@@ -14,34 +13,21 @@ import json
 import hashlib
 from pydantic import BaseModel
 import time
-from services.pinecone_service import store_documents, get_pinecone_index, get_openai_client
+from services.supabase_vector_service import store_documents, get_openai_client, query_supabase_vector
+from db.supabase import get_supabase_client
 
 app = FastAPI()
 
 
 OPENAI_API_KEY = os.getenv("CSA_OPENAI")
-PINECONE_API_KEY = os.getenv("CSA_PINECONE")
 
 # openai_client = OpenAI(api_key=OPENAI_API_KEY)
-# Initialize Pinecone (replace with your API key and index name)
-# pc = Pinecone(api_key=PINECONE_API_KEY)
-# index_name = "csa-sfo-website-content"
-# if index_name not in pc.list_indexes().names():
-#         pc.create_index(
-#             name=index_name, 
-#             dimension=1536, 
-#             metric='cosine',
-#             spec=ServerlessSpec(
-#                 cloud='aws',
-#                 region='us-east-1'
-#             )
-#         )
-# index = pc.Index(index_name)
+# Vector store is Supabase; no index bootstrap here
 
 hashes = {}
 
 
-# OpenAI and Pinecone clients are now initialized lazily
+# OpenAI client is initialized lazily
 # No need to redefine these functions
 
 # Split content into smaller chunks
@@ -95,34 +81,9 @@ def save_hashes():
     with open('hashes.json', 'w') as f:
         json.dump(hashes, f)
 
-# Modified store_embeddings
 async def store_embeddings(chunks: list[str], namespace: str, source_id: str):
-    """
-    Stores a list of text chunks as vector embeddings in Pinecone under a given namespace.
-    
-    Args:
-        chunks (list[str]): The text chunks to embed and store.
-        namespace (str): Pinecone namespace (e.g., "website", "sales").
-        source_id (str): A unique identifier for the source (URL, title, etc.).
-    """
-    for i, chunk in enumerate(chunks):
-        try:
-            embedding = await create_embedding(chunk)
-            vector_id = f"{source_id.replace('/', '_')}_{i}"
-            index.upsert(
-                vectors=[{
-                    "id": vector_id,
-                    "values": embedding,
-                    "metadata": {
-                        "text": chunk,
-                        "source": source_id
-                    }
-                }],
-                namespace=namespace
-            )
-            logging.info(f"Upserted vector {vector_id} in namespace '{namespace}'")
-        except Exception as e:
-            logging.error(f"Failed to upsert vector for {source_id}, chunk {i}: {e}")
+    """Deprecated: use store_documents from services.pinecone_service."""
+    await store_documents(chunks, namespace, source_id, category="Website")
 
 
 def split_overlap(text: str, size: int = 400, overlap: int = 50):
@@ -160,8 +121,19 @@ async def initialize_sales_content():
         )
 
 def check_index_stats():
-    stats = index.describe_index_stats()
-    logging.info(f"Pinecone index stats: {stats}")
+    supabase = get_supabase_client()
+    def count_ns(ns: str):
+        resp = supabase.table("documents").select("id", count="exact").eq("namespace", ns).execute()
+        return resp.count or 0
+    try:
+        website = count_ns("website")
+        sales   = count_ns("sales")
+        total   = (website or 0) + (sales or 0)
+        logging.info(f"Vector store stats (website={website}, sales={sales}, total={total})")
+        return {"namespaces": {"website": {"vector_count": website}, "sales": {"vector_count": sales}}, "total_vector_count": total}
+    except Exception as e:
+        logging.warning(f"Failed to get vector stats: {e}")
+        return {"namespaces": {}, "total_vector_count": 0}
 
 # Refresh embeddings for a single URL
 async def refresh_url(url: str, content: str | None = None):
@@ -180,8 +152,6 @@ async def refresh_url(url: str, content: str | None = None):
         logging.warning(f"No content found for {url}. Skipping refresh.")
         return
 
-    index = get_pinecone_index()
-
     # ----- Chunk + embed -----
     try:
         chunks: list[str] = await split_content(content)
@@ -193,34 +163,12 @@ async def refresh_url(url: str, content: str | None = None):
         logging.warning(f"No chunks generated for {url}. Skipping refresh.")
         return
 
-    stats = index.describe_index_stats()
-    dimension = stats.get("dimension", 1536)
+    # Delete existing vectors for this URL in Supabase
+    supabase = get_supabase_client()
+    await safe_supabase_operation(lambda: supabase.table("documents").delete().eq("source", url).execute(), "Delete by source failed")
 
-    new_vectors = []
-    for i, chunk in enumerate(chunks):
-        embedding = await create_embedding(chunk)
-        vector_id = f"{url.replace('/', '_')}_{i}"
-        new_vectors.append({
-            "id": vector_id,
-            "values": embedding,
-            "metadata": {"text": chunk, "url": url}
-        })
-
-    # Delete existing vectors for this URL
-    dummy_vector = [0] * dimension
-    results = index.query(
-        vector=dummy_vector,
-        top_k=10000,
-        filter={"url": url},
-        include_values=False,
-        include_metadata=False
-    )
-    existing_ids = [match["id"] for match in results["matches"]]
-    if existing_ids:
-        index.delete(ids=existing_ids)
-    
-    # Upsert new vectors
-    index.upsert(vectors=new_vectors, namespace="website")
+    # Upsert new vectors via store_documents
+    await store_documents(chunks=chunks, namespace="website", source_id=url, category="Website")
     
     # Update hash
     hash_value = compute_hash(content)
@@ -254,14 +202,12 @@ async def refresh_urls(urls_to_refresh: list[str]):
 class RefreshRequest(BaseModel):
     refresh_urls: list[str] = []
 
-# Retrieve relevant chunks from Pinecone
+# Retrieve relevant chunks from Supabase
 async def retrieve_relevant_chunks(query, top_k=5):
-    index = get_pinecone_index()
-    query_embedding = await create_embedding(query)
-    results = index.query(vector=query_embedding, top_k=top_k, include_metadata=True)
-    return [match["metadata"]["text"] for match in results["matches"]]
+    matches = await query_supabase_vector(query, top_k=top_k)
+    return [m["text"] for m in matches]
 
-# def export_pinecone_to_markdown(output_file="pinecone_content.md"):
+# def export_supabase_vector_to_markdown(output_file="supabase_vector_content.md"):
 #     try:
 #         index = get_pinecone_index()
 #         stats = index.describe_index_stats()
@@ -295,31 +241,15 @@ async def retrieve_relevant_chunks(query, top_k=5):
 
 #     except Exception as e:
 #         logging.error(f"Failed to export Pinecone data to markdown: {e}")
-def export_pinecone_to_markdown(output_file="pinecone_content.md"):
+def export_supabase_vector_to_markdown(output_file="supabase_vector_content.md"):
     try:
-        index = get_pinecone_index()
-        stats = index.describe_index_stats()
-        logging.info(f"Exporting Pinecone data (vectors: {stats.get('total_vector_count', 'N/A')})")
-
+        supabase = get_supabase_client()
+        resp = supabase.table("documents").select("source,text").execute()
+        rows = resp.data or []
         all_texts_by_url = {}
-
-        # Instead of querying with zero vector, use filter (if you can)
-        dummy_vector = [0.01] * stats['dimension']  # small non-zero vector
-
-        results = index.query(
-            vector=dummy_vector,
-            top_k=10000,
-            include_metadata=True
-        )
-
-        matches = results.get("matches", [])
-        if not matches:
-            logging.warning("No matches returned from Pinecone query.")
-
-        for match in matches:
-            metadata = match.get("metadata", {})
-            text = metadata.get("text", "")
-            url = metadata.get("url", "unknown-url")
+        for r in rows:
+            url = r.get("source") or "unknown-url"
+            text = r.get("text") or ""
             if url and text:
                 all_texts_by_url.setdefault(url, []).append(text)
 
@@ -334,19 +264,15 @@ def export_pinecone_to_markdown(output_file="pinecone_content.md"):
     except Exception as e:
         logging.exception(f"Failed to export Pinecone content: {e}")
 
-def delete_all_pinecone_data():
+def delete_all_supabase_vector_data():
     """
     Deletes all vectors from the Pinecone index.
     WARNING: This operation is irreversible.
     """
     try:
-        index = get_pinecone_index()
-        logging.info("Deleting all vectors from Pinecone index...")
-        
-        # Delete all vectors using delete with delete_all=True
-        index.delete(delete_all=True)
-        
-        logging.info("All vectors deleted from Pinecone index successfully.")
+        supabase = get_supabase_client()
+        supabase.table("documents").delete().neq("id","").execute()
+        logging.info("All supabase_vector vectors deleted successfully.")
     except Exception as e:
         logging.error(f"Failed to delete vectors from Pinecone: {e}")
 import re

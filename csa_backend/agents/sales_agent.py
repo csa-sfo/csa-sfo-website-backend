@@ -1,4 +1,5 @@
 from services.openai_service import run_openai_prompt
+from config.settings import OPENAI_MODEL
 from pathlib import Path
 from services.bot_response_formatter_md import ensure_markdown
 from services.cache_service import async_cache_workflow
@@ -22,5 +23,5 @@ async def run_sales_agent(user_message: str, context: str, history: str) -> str:
     # response, cache_source, response_time = await async_cache_workflow(prompt, sales_func)
     # logging.info(f"Sales Agent Greeting response: {response} (Cache Source: {cache_source}, Response Time: {response_time:.4f}s)")
 
-    response = await run_openai_prompt(prompt, model="gpt-4.1")
+    response = await run_openai_prompt(prompt, model=OPENAI_MODEL)
     return await ensure_markdown(response)

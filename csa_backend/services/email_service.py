@@ -1,6 +1,6 @@
 from models.request_models import ContactForm
 from services.openai_service import run_openai_prompt
-from config.settings import FROM_EMAIL, TO_EMAIL, MAILERSEND_API_KEY, FROM_NAME
+from config.settings import FROM_EMAIL, TO_EMAIL, MAILERSEND_API_KEY, FROM_NAME, OPENAI_MODEL
 import logging
 from pydantic import EmailStr
 import logging, html2text
@@ -79,7 +79,7 @@ async def draft_email_body_html(form: ContactForm) -> str:
         system_prompt=system_prompt,
         temperature=0.5,
         max_tokens=250,
-        model="gpt-4o-mini",
+        model=OPENAI_MODEL,
     )
     m = re.search(r"```(?:html)?\s*(.*?)```", html_body, re.DOTALL | re.IGNORECASE)
     html_body = m.group(1) if m else html_body

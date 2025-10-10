@@ -9,6 +9,7 @@ from datetime import datetime
 from app.config_simple import settings
 from contextlib import asynccontextmanager
 
+
 # Configure logging
 logging.basicConfig(
     level=getattr(logging, settings.log_level),
@@ -20,13 +21,15 @@ logger = logging.getLogger(__name__)
 try:
     from routes_register import router as api_router
     from routers.payments import payment_router
-    from services.bot_service import initialize_website_content, initialize_sales_content, get_pinecone_index, load_hashes, check_for_updates, get_urls, check_index_stats
+    from routers.router import message_router
+    from services.bot_service import initialize_website_content, initialize_sales_content, load_hashes, check_for_updates, get_urls, check_index_stats
 except ImportError as e:
     logger.error(f"Failed to import required modules: {e}")
     # Create empty routers if imports fail
     from fastapi import APIRouter
     api_router = APIRouter()
     payment_router = APIRouter()
+    message_router = APIRouter()
     logger.warning("Using empty routers due to import failure")
 
 from apscheduler.schedulers.background import BackgroundScheduler   
@@ -55,8 +58,7 @@ async def lifespan(app: FastAPI):
         global hashes
         try:
             hashes = load_hashes()
-            index = get_pinecone_index()
-            stats = index.describe_index_stats()
+            stats = check_index_stats()
             website_count = stats["namespaces"].get("website", {}).get("vector_count", 0)
             logger.info(f"Website vector count: {website_count}")
             sales_count   = stats["namespaces"].get("sales",   {}).get("vector_count", 0)
@@ -64,8 +66,8 @@ async def lifespan(app: FastAPI):
             if website_count == 0:
                 await initialize_website_content()
         except Exception as e:
-            logger.error(f"Failed to initialize Pinecone/OpenAI services: {e}")
-            logger.warning("Continuing without Pinecone/OpenAI services")
+            logger.error(f"Failed to initialize vector/OpenAI services: {e}")
+            logger.warning("Continuing without vector/OpenAI services")
             hashes = {}
         # if sales_count == 0:
         #     await initialize_sales_content()
@@ -133,6 +135,7 @@ origins = [
 
 # Include routers
 app.include_router(payment_router, prefix="/api/v1")  # Add this line to include payments router
+app.include_router(message_router, prefix="/api/v1")  # Add this line to include payments router
 
 # Add CORS middleware
 app.add_middleware(

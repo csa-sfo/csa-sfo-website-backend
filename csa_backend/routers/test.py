@@ -2,8 +2,8 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from knowledge_base.website_content import scrapped_website_content,get_urls
 from knowledge_base.sales_content import get_sales_content
-from services.bot_service import export_pinecone_to_markdown,refresh_urls
-from services.bot_service import delete_all_pinecone_data,check_for_updates
+from services.bot_service import export_supabase_vector_to_markdown,refresh_urls
+from services.bot_service import delete_all_supabase_vector_data,check_for_updates
 from agents.engagement_agent import run_engagement_agent
 router = APIRouter()
 
@@ -19,12 +19,12 @@ def sales_content_endpoint():
 @router.get("/retrieve_data")
 def retrieve_data_endpoint():
     # Call the export function from bot_service
-    export_pinecone_to_markdown()
+    export_supabase_vector_to_markdown()
     return JSONResponse(content={"message": "Data retrieval initiated"})
 @router.delete("/delete_data")
 def delete_data_endpoint():
-    delete_all_pinecone_data()
-    return JSONResponse(content={"message": "All Pinecone data deleted successfully"})
+    delete_all_supabase_vector_data()
+    return JSONResponse(content={"message": "All supabase_vector data deleted successfully"})
 @router.get("/check_updates")
 async def check_updates_endpoint():
     # Call the function to check for updates
