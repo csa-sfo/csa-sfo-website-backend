@@ -1,6 +1,6 @@
 import os, asyncio,backoff, logging
 from config.logging import setup_logging
-from config.settings import OPENAI_API_KEY
+from config.settings import OPENAI_API_KEY, OPENAI_MODEL
 from openai import OpenAI, APIError, APIConnectionError, APITimeoutError
 
 setup_logging()
@@ -28,12 +28,13 @@ def _sync_completion(model: str, messages: list, temperature: float, max_tokens:
         model=model,
         messages=messages,
         temperature=temperature,
-        max_tokens=max_tokens
+        max_tokens=max_tokens,
+        n=1
     )
 
 async def run_openai_prompt(
     prompt: str,
-    model: str = "gpt-4o",
+    model: str = OPENAI_MODEL,
     temperature: float = 0.7,
     max_tokens: int = 300,
     system_prompt: str = "You are a helpful AI assistant."
