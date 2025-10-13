@@ -1,0 +1,21 @@
+name: Keep backend awake
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"  # every 15 minutes
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping /wake (fallback to /health and /)
+        run: |
+          set -e
+          BASE="${BACKEND_URL%/}"
+          echo "Pinging: $BASE/wake"
+          (curl -fsS "$BASE/wake" || curl -fsS "$BASE/health" || curl -fsS "$BASE") | head -c 200 || true
+    env:
+      BACKEND_URL: https://csa-sfo-gsepbhatb3hrc8cg.eastus-01.azurewebsites.net
+
+

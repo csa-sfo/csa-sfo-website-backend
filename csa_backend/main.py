@@ -219,6 +219,11 @@ async def root():
 async def health_check():
     return {"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
 
+@app.get("/wake")
+async def wake():
+    # Touch lightweight resources to ensure cold services are initialized
+    return {"status": "awake", "timestamp": datetime.utcnow().isoformat()}
+
 @app.get("/debug/routes")
 async def debug_routes():
     routes = []
