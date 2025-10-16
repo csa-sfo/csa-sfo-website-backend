@@ -14,7 +14,7 @@ import hashlib
 from pydantic import BaseModel
 import time
 from services.supabase_vector_service import store_documents, get_openai_client, query_supabase_vector
-from db.supabase import get_supabase_client
+from db.supabase import get_supabase_client, safe_supabase_operation
 
 app = FastAPI()
 

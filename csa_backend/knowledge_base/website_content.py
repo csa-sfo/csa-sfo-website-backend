@@ -10,13 +10,13 @@ import logging
 import time
 def get_urls():
     urls = [
-        "https://csasfo.netlify.app/",
-        "https://csasfo.netlify.app/about",
-        "https://csasfo.netlify.app/events",
-        "https://csasfo.netlify.app/archive",
-        "https://csasfo.netlify.app/get-involved",
-        "https://csasfo.netlify.app/contact",
-        "https://csasfo.netlify.app/sponsorship",
+        "https://csasfo.com/",
+        "https://csasfo.com/about",
+        "https://csasfo.com/events",
+        "https://csasfo.com/archive",
+        "https://csasfo.com/get-involved",
+        "https://csasfo.com/contact",
+        "https://csasfo.com/sponsorship",
 
 
 
