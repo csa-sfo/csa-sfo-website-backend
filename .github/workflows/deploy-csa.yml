@@ -44,27 +44,27 @@ jobs:
         run: |
           echo "LOGIN_SERVER=$(az acr show --name ${{ env.ACR_NAME }} \
                             --query loginServer --output tsv)" >> $GITHUB_ENV
-      # 4.4) Cleanup local Docker (containers/images) on the runner to ensure a clean slate
-      - name: "Cleanup local Docker (containers/images)"
-        run: |
-          docker ps -aq | xargs -r docker rm -f || true
-          docker system prune -af --volumes || true
+      # # 4.4) Cleanup local Docker (containers/images) on the runner to ensure a clean slate
+      # - name: "Cleanup local Docker (containers/images)"
+      #   run: |
+      #     docker ps -aq | xargs -r docker rm -f || true
+      #     docker system prune -af --volumes || true
 
-      # 4.5) Purge existing images in ACR repo before building/pushing a new one
-      - name: "Purge existing ACR images for repository"
-        run: |
-          set -e
-          echo "Fetching tags for repository ${{ env.IMAGE_NAME }} in ACR ${{ env.ACR_NAME }}..."
-          TAGS=$(az acr repository show-tags --name ${{ env.ACR_NAME }} --repository ${{ env.IMAGE_NAME }} --output tsv || true)
-          if [ -n "$TAGS" ]; then
-            echo "Deleting existing tags:"
-            for TAG in $TAGS; do
-              echo " - ${{ env.IMAGE_NAME }}:$TAG"
-              az acr repository delete --yes --name ${{ env.ACR_NAME }} --image ${{ env.IMAGE_NAME }}:$TAG
-            done
-          else
-            echo "No existing tags found."
-          fi
+      # # 4.5) Purge existing images in ACR repo before building/pushing a new one
+      # - name: "Purge existing ACR images for repository"
+      #   run: |
+      #     set -e
+      #     echo "Fetching tags for repository ${{ env.IMAGE_NAME }} in ACR ${{ env.ACR_NAME }}..."
+      #     TAGS=$(az acr repository show-tags --name ${{ env.ACR_NAME }} --repository ${{ env.IMAGE_NAME }} --output tsv || true)
+      #     if [ -n "$TAGS" ]; then
+      #       echo "Deleting existing tags:"
+      #       for TAG in $TAGS; do
+      #         echo " - ${{ env.IMAGE_NAME }}:$TAG"
+      #         az acr repository delete --yes --name ${{ env.ACR_NAME }} --image ${{ env.IMAGE_NAME }}:$TAG
+      #       done
+      #     else
+      #       echo "No existing tags found."
+      #     fi
 
       # 5) Build+push multi-arch (we only target amd64 here)
       - name: Build & push amd64 image
