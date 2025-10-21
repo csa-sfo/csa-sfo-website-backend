@@ -13,6 +13,7 @@ from routers.event import event_router
 from routers.event_registration import event_registration_router
 from routers.volunteer import volunteer_router
 from routers.upload import upload_router
+from routers.event_images import event_images_router
 # Register all routers here
 
 
@@ -30,3 +31,4 @@ router.include_router(event_router,tags=["events"])
 router.include_router(event_registration_router, tags=["event-registrations"])
 router.include_router(volunteer_router,tags=["volunteers"])
 router.include_router(upload_router, tags=["upload"])
+router.include_router(event_images_router, prefix="/event-images", tags=["event-images"])
