@@ -40,7 +40,7 @@ async def scrapped_website_content(url):
         for elem in soup(["nav", "footer"]):
             elem.decompose()
         h = html2text.HTML2Text()
-        h.ignore_links = True
+        h.ignore_links = False  # Include href links in the markdown output
         markdown_content = h.handle(str(soup))
         logging.info(f"Scraped {len(markdown_content)} characters from {url}")
         return markdown_content
