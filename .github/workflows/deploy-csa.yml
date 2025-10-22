@@ -44,6 +44,41 @@ jobs:
         run: |
           echo "LOGIN_SERVER=$(az acr show --name ${{ env.ACR_NAME }} \
                             --query loginServer --output tsv)" >> $GITHUB_ENV
+      # # 4.4) Cleanup local Docker (containers/images) on the runner to ensure a clean slate
+      # - name: "Cleanup local Docker (containers/images)"
+      #   run: |
+      #     docker ps -aq | xargs -r docker rm -f || true
+      #     docker system prune -af --volumes || true
+
+      # # 4.5) Purge existing images in ACR repo before building/pushing a new one
+      # - name: "Purge existing ACR images for repository"
+      #   run: |
+      #     set -e
+      #     echo "Fetching tags for repository ${{ env.IMAGE_NAME }} in ACR ${{ env.ACR_NAME }}..."
+      #     TAGS=$(az acr repository show-tags --name ${{ env.ACR_NAME }} --repository ${{ env.IMAGE_NAME }} --output tsv || true)
+      #     if [ -n "$TAGS" ]; then
+      #       echo "Deleting existing tags:"
+      #       for TAG in $TAGS; do
+      #         echo " - ${{ env.IMAGE_NAME }}:$TAG"
+      #         az acr repository delete --yes --name ${{ env.ACR_NAME }} --image ${{ env.IMAGE_NAME }}:$TAG
+      #       done
+      #     else
+      #       echo "No existing tags found."
+      #     fi
+
+      # Cleanup previous containers/images
+      - name: "Cleanup local Docker (containers/images)"
+        run: |
+          docker ps -aq | xargs -r docker rm -f || true
+          docker system prune -af --volumes || true
+
+      # Purge ACR repository entirely (handles last manifest/tag case)
+      - name: "Delete ACR repository (force)"
+        run: |
+          REPO="${{ env.IMAGE_NAME }}"
+          ACR="${{ env.ACR_NAME }}"
+          echo "Deleting entire repository $REPO from ACR $ACR (safe; will be recreated by push)..."
+          az acr repository delete --name "$ACR" --repository "$REPO" --yes || true
 
       # 5) Build+push multi-arch (we only target amd64 here)
       - name: Build & push amd64 image
