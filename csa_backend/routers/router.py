@@ -116,7 +116,8 @@ async def chat_controller(req: QueryRequest):
                 )
          context_txt = "\n\n".join(context["chunks"])
          #logging.info(f"Context text: {context_txt}")
-         reply = await run_sales_agent(req.query, context_txt, history="")
+         history = req.history if req.history else ""
+         reply = await run_sales_agent(req.query, context_txt, history=history)
 
          logging.info(f"Sales Agent response: {reply}")
          return ChatResponse(
