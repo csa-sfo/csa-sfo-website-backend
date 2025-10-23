@@ -131,7 +131,12 @@ def verify_admin_token(authorization: str = Header(None)):
 
     try:
         # Split the header into 'Bearer' and the actual token
-        scheme, token = authorization.split(" ")
+        parts = authorization.split(" ")
+        if len(parts) != 2:
+            logger.warning(f"Invalid authorization header format. Parts: {len(parts)}")
+            raise HTTPException(status_code=401, detail="Invalid authorization header format")
+        
+        scheme, token = parts
         if scheme.lower() != "bearer":
             logger.warning("Authorization scheme is not Bearer")
             raise HTTPException(status_code=401, detail="Invalid auth scheme")

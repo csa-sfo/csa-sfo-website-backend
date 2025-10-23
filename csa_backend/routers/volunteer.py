@@ -1,8 +1,9 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Header
 from datetime import datetime
 from supabase import create_client, Client
 import os
 from models.volunteers_models import VolunteerApplication
+from services.auth_services import verify_admin_token
 import logging
 
 # Set up logging
@@ -63,13 +64,24 @@ async def submit_volunteer_application(application: VolunteerApplication):
         raise HTTPException(status_code=500, detail=str(e))
     
 @volunteer_router.get("/volunteers/all")
-def get_all_volunteers():
+def get_all_volunteers(authorization: str = Header(None)):
     """
     Retrieve all volunteers from the Supabase 'volunteers' table.
-    Public endpoint: no admin access required.
+    Admin-only endpoint: requires valid admin authentication token.
     """
     try:
-        volunteers_response = supabase.table("volunteers").select("*").execute()
+        # Verify admin access
+        if not authorization:
+            raise HTTPException(status_code=401, detail="Authorization header missing")
+        
+        # Pass the full authorization header (with "Bearer " prefix)
+        payload = verify_admin_token(authorization)
+        
+        if not payload:
+            raise HTTPException(status_code=403, detail="Invalid or expired admin token")
+        
+        # Fetch all volunteers, ordered by submission date (newest first)
+        volunteers_response = supabase.table("volunteers").select("*").order("submitted_at", desc=True).execute()
 
         if not volunteers_response.data:
             return {"volunteers": []}
@@ -77,6 +89,8 @@ def get_all_volunteers():
         volunteers = volunteers_response.data
         return {"volunteers": volunteers}
 
+    except HTTPException:
+        raise
     except Exception as e:
         logging.error(f"Error fetching volunteers: {e}")
         raise HTTPException(status_code=500, detail=f"Error fetching volunteers: {e}")
