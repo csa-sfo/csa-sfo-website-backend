@@ -8,7 +8,7 @@ OPENAI_API_KEY = os.getenv("CSA_OPENAI")
 if not OPENAI_API_KEY:
     print("WARNING: CSA_OPENAI environment variable not set")
 
-OPENAI_MODEL = os.getenv("CSA_OPENAI_MODEL", "gpt-4.1-mini")
+OPENAI_MODEL = os.getenv("CSA_OPENAI_MODEL", "gpt-4.1")
 
 # Pinecone Configuration
 PINECONE_API_KEY = os.getenv("CSA_PINECONE")
