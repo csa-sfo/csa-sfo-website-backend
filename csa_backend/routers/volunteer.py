@@ -94,3 +94,46 @@ def get_all_volunteers(authorization: str = Header(None)):
     except Exception as e:
         logging.error(f"Error fetching volunteers: {e}")
         raise HTTPException(status_code=500, detail=f"Error fetching volunteers: {e}")
+
+@volunteer_router.delete("/volunteers/delete/{volunteer_id}")
+def delete_volunteer(volunteer_id: str, authorization: str = Header(None)):
+    """
+    Delete a volunteer application from the Supabase 'volunteers' table.
+    Admin-only endpoint: requires valid admin authentication token.
+    
+    Args:
+        volunteer_id: The UUID of the volunteer to delete
+        authorization: Bearer token for admin authentication
+    
+    Returns:
+        JSON response with success message
+    """
+    try:
+        # Verify admin access
+        if not authorization:
+            raise HTTPException(status_code=401, detail="Authorization header missing")
+        
+        # Pass the full authorization header (with "Bearer " prefix)
+        payload = verify_admin_token(authorization)
+        
+        if not payload:
+            raise HTTPException(status_code=403, detail="Invalid or expired admin token")
+        
+        # Delete the volunteer from Supabase
+        response = supabase.table("volunteers").delete().eq("id", volunteer_id).execute()
+        
+        if not response.data:
+            logging.warning(f"Volunteer with ID {volunteer_id} not found or already deleted")
+            raise HTTPException(status_code=404, detail="Volunteer not found")
+        
+        logging.info(f"Volunteer deleted successfully: ID {volunteer_id}")
+        return {
+            "message": "Volunteer deleted successfully",
+            "volunteer_id": volunteer_id
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error deleting volunteer: {e}")
+        raise HTTPException(status_code=500, detail=f"Error deleting volunteer: {e}")
