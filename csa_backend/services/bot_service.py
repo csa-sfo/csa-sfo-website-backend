@@ -1,9 +1,4 @@
 from fastapi import FastAPI, Request
-from openai import OpenAI
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
-from webdriver_manager.chrome import ChromeDriverManager
 # from config.settings import PINECONE_API_KEY, OPENAI_API_KEY
 from knowledge_base.website_content import scrapped_website_content,get_urls
 from knowledge_base.sales_content import get_sales_content
@@ -31,13 +26,17 @@ hashes = {}
 # No need to redefine these functions
 
 # Split content into smaller chunks
-async def split_content(content, chunk_size=500):
+def split_content(content: str, chunk_size: int = 500) -> list[str]:
+    """Split text into roughly `chunk_size`-sized word chunks.
+
+    Preserves word boundaries and ensures no empty chunks are returned.
+    """
     if not content:
         logging.warning("No content to split")
         return []
     words = content.split()
-    final_chunks = []
-    current_chunk = []
+    final_chunks: list[str] = []
+    current_chunk: list[str] = []
     current_length = 0
     for word in words:
         word_length = len(word) + 1
@@ -56,7 +55,7 @@ async def split_content(content, chunk_size=500):
 # Create embeddings using OpenAI
 async def create_embedding(text):
     client = get_openai_client()
-    response =  client.embeddings.create(input=text, model="text-embedding-ada-002")
+    response =  client.embeddings.create(input=text, model="text-embedding-3-small")
     return response.data[0].embedding
 
 
@@ -153,11 +152,7 @@ async def refresh_url(url: str, content: str | None = None):
         return
 
     # ----- Chunk + embed -----
-    try:
-        chunks: list[str] = await split_content(content)
-    except TypeError:
-        # Fallback if split_content still returns coroutine when forgotten to await elsewhere
-        chunks = await split_content(content)
+    chunks: list[str] = split_content(content)
 
     if not chunks:
         logging.warning(f"No chunks generated for {url}. Skipping refresh.")
