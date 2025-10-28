@@ -5,7 +5,7 @@ from models.user_models import SigninRequest, TokenRequest, TokenResponse
 from services.auth_services import verify_token, signin_user, get_admin_by_email, generate_admin_token, verify_admin_token
 from models.user_models import SignupRequest, GoogleProfileRequest, ExtraDetails
 from datetime import datetime, timedelta
-import os, json, jwt, requests
+import os, json, jwt, requests, httpx
 from fastapi import Depends
 from dotenv import load_dotenv
 import logging
@@ -592,3 +592,98 @@ async def check_email_exists(email: str):
     except Exception as e:
         logger.error(f"Error checking email existence: {e}")
         raise HTTPException(status_code=500, detail=f"Error checking email: {str(e)}")
+
+
+@auth_router.delete("/users/delete/{user_id}")
+def delete_user(user_id: str, token_data: dict = Depends(verify_admin_token)):
+    """
+    Delete a user from the users table.
+    Also updates attendee counts for all events the user was registered for.
+    Only accessible by admin users.
+    """
+    try:
+        email = token_data.get("email")
+        logger.info(f"Admin {email} is deleting user {user_id}")
+        
+        # First, check if the user exists
+        user_check = supabase.table("users").select("id, email, name").eq("id", user_id).execute()
+        if not user_check.data or len(user_check.data) == 0:
+            logger.warning(f"User {user_id} not found")
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        user_data = user_check.data[0]
+        user_email = user_data.get("email")
+        user_name = user_data.get("name")
+        
+        # Get all event registrations for this user
+        registrations_resp = supabase.table("event_registrations").select(
+            "id, event_id, events(attendees)"
+        ).eq("user_id", user_id).execute()
+        
+        events_to_update = []
+        if registrations_resp.data:
+            logger.info(f"User {user_id} has {len(registrations_resp.data)} event registrations")
+            
+            # Collect event IDs and their current attendee counts
+            for registration in registrations_resp.data:
+                event_id = registration["event_id"]
+                current_attendees = registration["events"]["attendees"] if registration.get("events") else 0
+                events_to_update.append({
+                    "event_id": event_id,
+                    "current_attendees": current_attendees
+                })
+            
+            # Delete all event registrations for this user
+            delete_registrations_resp = supabase.table("event_registrations").delete().eq("user_id", user_id).execute()
+            logger.info(f"Deleted {len(registrations_resp.data)} event registrations for user {user_id}")
+            
+            # Update attendee counts for all affected events
+            for event_info in events_to_update:
+                new_attendees = max(0, event_info["current_attendees"] - 1)
+                supabase.table("events").update({
+                    "attendees": new_attendees
+                }).eq("id", event_info["event_id"]).execute()
+                logger.info(f"Updated attendees for event {event_info['event_id']}: {event_info['current_attendees']} -> {new_attendees}")
+        
+        # Delete the user from the users table
+        delete_resp = supabase.table("users").delete().eq("id", user_id).execute()
+        
+        if not delete_resp.data:
+            logger.error(f"Failed to delete user {user_id}")
+            raise HTTPException(status_code=500, detail="Failed to delete user")
+        
+        # Delete the user from Supabase Authentication (auth.users)
+        try:
+            auth_headers = {
+                "apikey": SUPABASE_KEY,
+                "Authorization": f"Bearer {SUPABASE_KEY}",
+                "Content-Type": "application/json"
+            }
+            auth_delete_url = f"{SUPABASE_URL}/auth/v1/admin/users/{user_id}"
+            
+            auth_delete_response = httpx.delete(auth_delete_url, headers=auth_headers)
+            auth_delete_response.raise_for_status()
+            
+            logger.info(f"✅ Successfully deleted user {user_id} from Supabase Auth")
+        except httpx.HTTPStatusError as e:
+            logger.error(f"❌ Failed to delete user {user_id} from Supabase Auth (HTTP Error): {e.response.status_code} - {e.response.text}")
+            logger.warning(f"User {user_id} deleted from users table but may still exist in Supabase Auth due to error.")
+        except Exception as auth_delete_error:
+            logger.error(f"❌ Failed to delete user {user_id} from Supabase Auth (General Error): {auth_delete_error}")
+            logger.warning(f"User {user_id} deleted from users table but may still exist in Supabase Auth.")
+        
+        logger.info(f"Successfully deleted user {user_id} ({user_name or user_email})")
+        return {
+            "message": "User deleted successfully",
+            "user_id": user_id,
+            "user_name": user_name,
+            "user_email": user_email,
+            "events_updated": len(events_to_update),
+            "registrations_removed": len(registrations_resp.data) if registrations_resp.data else 0
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting user {user_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Error deleting user: {str(e)}")
