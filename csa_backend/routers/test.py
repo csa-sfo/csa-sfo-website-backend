@@ -4,7 +4,7 @@ from knowledge_base.website_content import scrapped_website_content,get_urls
 from knowledge_base.sales_content import get_sales_content
 from services.bot_service import export_supabase_vector_to_markdown,refresh_urls
 from services.bot_service import delete_all_supabase_vector_data,check_for_updates
-from agents.engagement_agent import run_engagement_agent
+from agent.engagement_agent import run_engagement_agent
 router = APIRouter()
 
 @router.post("/website_content")

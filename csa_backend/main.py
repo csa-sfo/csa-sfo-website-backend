@@ -22,7 +22,7 @@ try:
     from routes_register import router as api_router
     from routers.payments import payment_router
     from routers.router import message_router
-    from services.bot_service import initialize_website_content, initialize_sales_content, load_hashes, check_for_updates, get_urls, check_index_stats
+    from services.bot_service import initialize_website_content, initialize_events_content, initialize_sales_content, load_hashes, check_for_updates, get_urls, check_index_stats
 except ImportError as e:
     logger.error(f"Failed to import required modules: {e}")
     # Create empty routers if imports fail
@@ -57,6 +57,7 @@ async def lifespan(app: FastAPI):
 
         global hashes
         try:
+            from services.bot_service import initialize_website_content, initialize_sales_content, load_hashes, check_for_updates, get_urls, check_index_stats
             hashes = load_hashes()
             stats = check_index_stats()
             website_count = stats["namespaces"].get("website", {}).get("vector_count", 0)
@@ -65,6 +66,7 @@ async def lifespan(app: FastAPI):
             logger.info(f"Vector count : {stats['total_vector_count']}")
             if website_count == 0:
                 await initialize_website_content()
+                # await initialize_events_content()
         except Exception as e:
             logger.error(f"Failed to initialize vector/OpenAI services: {e}")
             logger.warning("Continuing without vector/OpenAI services")

@@ -3,6 +3,7 @@ from typing import List
 from pathlib import Path
 from services.openai_service import run_openai_prompt
 import logging
+from datetime import datetime
 
 PROMPT_PATH = Path(__file__).parent.parent / "prompts/info_prompt.txt"
 
@@ -14,7 +15,10 @@ async def run_info_agent(user_message: str, context_chunks: List[str]) -> str:
     #     prompt_template = f.read()
     with open(PROMPT_PATH, "r", encoding="utf-8") as f:
         prompt_template = f.read()
-
+        text = "\nPlease note events and meetings are the same. \n"
+        today_str = datetime.now().strftime("%m-%d-%Y")
+        text += f"Today's date is {today_str} \n"
+        prompt_template += text
     context = "\n\n".join(context_chunks)
     prompt = (
         f"{prompt_template}\n\n"

@@ -14,13 +14,14 @@ from services.detect_intent_service import is_demo_request, is_positive_response
 from services.cache_service import async_cache_workflow
 
 # ────── AI agents ──────
-from agents.engagement_agent import run_engagement_agent
-from agents.intent_agent import run_intent_agent
-from agents.context_agent import retrieve_context
-from agents.sales_agent import run_sales_agent
-from agents.objection_agent import run_objection_agent
-from agents.summary_agent import run_summary_agent
-from agents.info_agent import run_info_agent
+from agent.engagement_agent import run_engagement_agent
+from agent.intent_agent import run_intent_agent
+from agent.context_agent import retrieve_context
+from services.event_service import fetch_upcoming_events, format_upcoming_events_for_prompt
+from agent.sales_agent import run_sales_agent
+from agent.objection_agent import run_objection_agent
+from agent.summary_agent import run_summary_agent
+from agent.info_agent import run_info_agent
 from config.logging import setup_logging
 
 def build_updated_history(existing_history: list, user_query: str, bot_response: str) -> list:
@@ -105,7 +106,15 @@ message_router = APIRouter()
 async def chat_controller(req: QueryRequest):
     try:
          context  = await retrieve_context(req.query)
-         if not context["chunks"]:
+         # Filter out archived sources to avoid past events leakage
+         try:
+             meta_matches = context.get("meta", [])
+             filtered_meta = [m for m in meta_matches if not str(m.get("source") or "").lower().__contains__("/archive")]
+             filtered_chunks = [m.get("text", "") for m in filtered_meta if m.get("text")]
+         except Exception:
+             filtered_chunks = context["chunks"]
+
+         if not filtered_chunks:
                 logging.warning("No RAG context found.")
                 # Persist neutral response when no context found
                 neutral_response = "Tell me a bit more so I can point you to the right solution."
@@ -114,7 +123,26 @@ async def chat_controller(req: QueryRequest):
                     intent="",
                     routed_agent="neutral"
                 )
-         context_txt = "\n\n".join(context["chunks"])
+         # Append an Upcoming Events section to help the LLM avoid past events
+         try:
+             upcoming = await fetch_upcoming_events(limit=3)
+             upcoming_block = format_upcoming_events_for_prompt(upcoming)
+         except Exception as e:
+             logging.warning(f"Failed to fetch upcoming events: {e}")
+             upcoming_block = ""
+
+         # Greeting/first message → constrain context strictly to upcoming events
+         is_greetings = is_greeting(req.query)
+         is_first_message = len(req.history or []) <= 1
+
+         if (is_greetings or is_first_message) and upcoming_block:
+             context_chunks = [upcoming_block]
+         else:
+             context_chunks = filtered_chunks[:]
+             if upcoming_block:
+                 context_chunks.append(upcoming_block)
+
+         context_txt = "\n\n".join(context_chunks)
          #logging.info(f"Context text: {context_txt}")
          history = req.history if req.history else ""
          reply = await run_sales_agent(req.query, context_txt, history=history)

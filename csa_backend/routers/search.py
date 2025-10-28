@@ -1,4 +1,4 @@
-from agents.context_agent import retrieve_context
+from agent.context_agent import retrieve_context
 from fastapi import APIRouter, Query
 from pydantic import BaseModel
 from datetime import date

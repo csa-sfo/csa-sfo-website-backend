@@ -8,6 +8,7 @@ from services.auth_services import verify_token, get_admin_by_email
 from fastapi.security import OAuth2PasswordBearer
 from typing import Optional, List
 from datetime import datetime
+import pytz
 from uuid import UUID
 from supabase import create_client, Client
 import os
@@ -353,6 +354,34 @@ def get_public_events():
     except Exception as e:
         logging.error(f"Error fetching public events: {e}")
         raise HTTPException(status_code=500, detail=f"Error fetching events: {e}")
+
+
+@event_router.get("/events/upcoming")
+def get_upcoming_events(limit: int = 10, tz: str = "America/Los_Angeles"):
+    """
+    Public endpoint: return future events only, ascending by date.
+    """
+    try:
+        logging.info("Fetching upcoming events")
+        try:
+            timezone = pytz.timezone(tz)
+        except Exception:
+            timezone = pytz.UTC
+        now_iso = datetime.now(timezone).isoformat()
+
+        events_resp = (
+            supabase
+            .table("events")
+            .select("*")
+            .gte("date_time", now_iso)
+            .order("date_time", desc=False)
+            .limit(limit)
+            .execute()
+        )
+        return {"events": events_resp.data or []}
+    except Exception as e:
+        logging.error(f"Error fetching upcoming: {e}")
+        raise HTTPException(status_code=500, detail="Error fetching upcoming events")
 
 
 def _is_valid_uuid(val: str) -> bool:

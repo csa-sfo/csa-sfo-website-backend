@@ -8,7 +8,11 @@ OPENAI_API_KEY = os.getenv("CSA_OPENAI")
 if not OPENAI_API_KEY:
     print("WARNING: CSA_OPENAI environment variable not set")
 
-OPENAI_MODEL = os.getenv("CSA_OPENAI_MODEL", "gpt-4.1")
+OPENAI_MODEL = os.getenv("CSA_OPENAI_MODEL", "gpt-4.1-mini")
+
+# OpenAI throttling
+OPENAI_CONCURRENCY = int(os.getenv("CSA_OPENAI_CONCURRENCY", "3"))
+OPENAI_MAX_BACKOFF_TIME = int(os.getenv("CSA_OPENAI_MAX_BACKOFF_TIME", "60"))
 
 # Pinecone Configuration
 PINECONE_API_KEY = os.getenv("CSA_PINECONE")

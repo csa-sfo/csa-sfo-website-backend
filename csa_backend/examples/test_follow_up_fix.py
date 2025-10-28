@@ -16,7 +16,7 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Mock imports
-from agents.follow_up_agent import extract_collected_info
+from agent.follow_up_agent import extract_collected_info
 from services.stage_detect_service import detect_stage, is_name
 
 async def test_name_extraction():

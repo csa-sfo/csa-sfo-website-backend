@@ -13,7 +13,7 @@ import json
 import hashlib
 from pydantic import BaseModel
 import time
-from services.supabase_vector_service import store_documents, get_openai_client, query_supabase_vector
+from services.supabase_vector_service import store_documents, get_openai_client, query_supabase_vector, store_prepared_documents
 from db.supabase import get_supabase_client, safe_supabase_operation
 
 app = FastAPI()
@@ -55,9 +55,9 @@ async def split_content(content, chunk_size=500):
 
 # Create embeddings using OpenAI
 async def create_embedding(text):
-    client = get_openai_client()
-    response =  client.embeddings.create(input=text, model="text-embedding-ada-002")
-    return response.data[0].embedding
+    # Delegate to supabase_vector_service embed with retries
+    from services.supabase_vector_service import embed_text
+    return await embed_text(text)
 
 
 # Compute hash of content
@@ -279,6 +279,32 @@ import re
 
 def convert_markdown_links_to_html(text):
     pattern = r"\[([^\]]+)\]\(([^)]+)\)"
-    return re.sub(pattern, r'<a href="\2" target="_blank" style="color: blue;">\1</a>', text)
+    return re.sub(pattern, r'<a href="\2" target="_blank" style="color: blue; text-decoration: underline;">\1</a>', text)
 
    
+
+# Events content initialization via Supabase RPC
+async def initialize_events_content(chunk_size: int = 400, overlap: int = 50) -> int:
+    """Fetch pre-chunked event rows via RPC and store with embeddings into documents.
+
+    Returns number of vectors upserted.
+    """
+    supabase = get_supabase_client()
+    payload = {"chunk_size": chunk_size, "overlap": overlap}
+    resp = await safe_supabase_operation(
+        lambda: supabase.rpc("prepare_event_documents", payload).execute(),
+        "prepare_event_documents RPC failed",
+    )
+    rows = resp.data or []
+    if not rows:
+        logging.info("No event rows returned from prepare_event_documents")
+        return 0
+    upserted = await store_prepared_documents(rows)
+    logging.info(f"Initialized events content: upserted {upserted} vectors")
+    return upserted
+
+
+async def initialize_site_and_events():
+    """Convenience wrapper: initialize website and events content."""
+    await initialize_website_content()
+    await initialize_events_content()

@@ -10,11 +10,12 @@ sentence-transformers==2.7.0
 numpy==1.26.4
 selenium==4.17.2
 markdown==3.6
-openai==1.79.0
+openai==1.107.3
+openai-agents==0.3.0
 pinecone==6.0.2
 html2text==2025.4.15
 python-dotenv==1.1.0
-pydantic-settings==2.2.1
+pydantic-settings
 apscheduler==3.11.0
 webdriver-manager==4.0.2
 supabase==2.15.0
