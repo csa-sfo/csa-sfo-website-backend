@@ -4,6 +4,7 @@ from pydantic import BaseModel
 from supabase import create_client, Client
 import os
 from typing import Optional
+from services.auth_services import verify_admin_token
 
 # Initialize router
 event_registration_router = APIRouter()
@@ -330,6 +331,57 @@ async def get_event_registered_users(event_id: str):
     except Exception as e:
         logging.error(f"Error getting registered users for event: {e}")
         raise HTTPException(status_code=500, detail=f"Error getting registered users: {e}")
+
+@event_registration_router.delete("/event-registrations/delete/{event_id}/{user_id}")
+async def delete_event_registration(event_id: str, user_id: str, token_data: dict = Depends(verify_admin_token)):
+    """
+    Delete a user's registration for a specific event (Admin only).
+    Also updates the event's attendee count.
+    """
+    admin_email = token_data.get("email", "Unknown")
+    logging.info(f"Admin {admin_email} is deleting registration for user {user_id} from event {event_id}")
+    
+    try:
+        supabase = get_supabase_client()
+        
+        # Check if registration exists
+        reg_check = supabase.table("event_registrations").select("id").eq("user_id", user_id).eq("event_id", event_id).execute()
+        
+        if not reg_check.data or len(reg_check.data) == 0:
+            raise HTTPException(status_code=404, detail="Registration not found")
+        
+        # Get current event attendees count
+        event_resp = supabase.table("events").select("id, attendees").eq("id", event_id).limit(1).execute()
+        if not event_resp.data:
+            raise HTTPException(status_code=404, detail="Event not found")
+        
+        current_attendees = event_resp.data[0].get("attendees", 0)
+        
+        # Delete the registration
+        delete_resp = supabase.table("event_registrations").delete().eq("user_id", user_id).eq("event_id", event_id).execute()
+        
+        if not delete_resp.data:
+            raise HTTPException(status_code=500, detail="Failed to delete registration")
+        
+        # Update event attendees count
+        new_attendees = max(0, current_attendees - 1)
+        supabase.table("events").update({"attendees": new_attendees}).eq("id", event_id).execute()
+        
+        logging.info(f"Admin {admin_email} successfully deleted registration and updated attendees: {current_attendees} -> {new_attendees}")
+        
+        return {
+            "message": "Registration deleted successfully",
+            "event_id": event_id,
+            "user_id": user_id,
+            "previous_attendees": current_attendees,
+            "updated_attendees": new_attendees
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error deleting event registration: {e}")
+        raise HTTPException(status_code=500, detail=f"Error deleting registration: {str(e)}")
 
 @event_registration_router.get("/debug/event-registrations")
 async def debug_event_registrations():
