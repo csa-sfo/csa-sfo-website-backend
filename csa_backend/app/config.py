@@ -1,6 +1,7 @@
 import os
 from typing import Optional
 from pydantic_settings import BaseSettings
+from pydantic import Field
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -57,6 +58,14 @@ class Settings(BaseSettings):
     stripe_secret_key: Optional[str] = None
     stripe_webhook_secret: Optional[str] = None
     
+    # AWS SES Configuration
+    aws_access_key_id: Optional[str] = Field(default=None, env="CSA_AWS_ACCESS_KEY_ID")
+    aws_secret_access_key: Optional[str] = Field(default=None, env="CSA_AWS_SECRET_ACCESS_KEY")
+    aws_region: Optional[str] = Field(default=None, env="CSA_AWS_REGION")
+    aws_ses_from_email: Optional[str] = Field(default=None, env="CSA_AWS_SES_FROM_EMAIL")
+    aws_ses_from_name: Optional[str] = Field(default=None, env="CSA_AWS_SES_FROM_NAME")
+    frontend_url: Optional[str] = Field(default=None, env="CSA_FRONTEND_URL")
+    
     @property
     def redis_url(self) -> str:
         """Build Redis URL from components."""
@@ -68,6 +77,8 @@ class Settings(BaseSettings):
         env_file = ".env"
         env_prefix = "CSA_"
         case_sensitive = False
+        # Allow extra fields for AWS (which don't have CSA_ prefix)
+        extra = "ignore"
 
 # Create settings instance
 try:

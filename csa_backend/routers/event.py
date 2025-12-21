@@ -145,14 +145,40 @@ def update_event(event_id: str,event: Event,token_data: dict = Depends(verify_to
         raise HTTPException(status_code=404, detail="Event not found or unauthorized")
 
     try:
+        old_event_data = event_resp.data[0]
+        old_date_time = old_event_data.get("date_time")
+        
         update_data = {
             k: (v.isoformat() if isinstance(v, datetime) else v)
             for k, v in event.dict(exclude_unset=True).items()
             if k not in ["speakers", "agenda"]
         }
+        
+        # Check if date_time is being updated
+        new_date_time = update_data.get("date_time")
+        date_time_changed = False
+        if new_date_time and old_date_time and new_date_time != old_date_time:
+            date_time_changed = True
+            logging.info(f"Event {event_id} date_time changed from {old_date_time} to {new_date_time}")
 
         # Update main event data
         supabase.table("events").update(update_data).eq("id", str(event_id)).execute()
+        
+        # Reschedule reminder jobs if event time changed
+        if date_time_changed:
+            try:
+                from services.event_email_scheduler import reschedule_reminders_for_event
+                import asyncio
+                
+                # Parse new date_time
+                new_event_datetime = datetime.fromisoformat(new_date_time.replace('Z', '+00:00'))
+                
+                # Reschedule all reminder jobs for this event
+                rescheduled = asyncio.run(reschedule_reminders_for_event(str(event_id), new_event_datetime))
+                logging.info(f"Rescheduled {rescheduled} reminder jobs for event {event_id}")
+            except Exception as reschedule_error:
+                logging.warning(f"Failed to reschedule reminders for event {event_id}: {reschedule_error}")
+                # Don't fail event update if rescheduling fails
 
         # Only update speakers and agenda if they are provided
         if hasattr(event, 'speakers') and event.speakers is not None:

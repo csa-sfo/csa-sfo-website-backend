@@ -17,6 +17,7 @@ html2text==2025.4.15
 python-dotenv==1.1.0
 pydantic-settings
 apscheduler==3.11.0
+sqlalchemy==2.0.23
 webdriver-manager==4.0.2
 supabase==2.15.0
 backoff==2.2.1
@@ -29,6 +30,7 @@ pyyaml==6.0.2
 RapidFuzz==3.13.0
 vapi_server_sdk==1.5.1
 stripe==8.10.0
+boto3==1.35.0
 
 
 fastapi-cache2[redis]==0.2.1

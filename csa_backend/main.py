@@ -95,6 +95,53 @@ async def lifespan(app: FastAPI):
 
         loop = asyncio.get_event_loop()
         loop.create_task(refresh_task())
+        
+        # Email automation scheduler
+        try:
+            from apscheduler.schedulers.background import BackgroundScheduler
+            from apscheduler.triggers.cron import CronTrigger
+            from services.event_email_scheduler import run_email_automation
+            
+            # Try to use SQLite job store for persistence, fallback to MemoryJobStore
+            try:
+                from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
+                scheduler = BackgroundScheduler(
+                    jobstores={
+                        'default': SQLAlchemyJobStore(url='sqlite:///jobs.sqlite')
+                    }
+                )
+                persistence_type = "SQLite (persistent)"
+            except (ImportError, Exception) as e:
+                # Fallback to MemoryJobStore if SQLAlchemy not available or has compatibility issues
+                from apscheduler.jobstores.memory import MemoryJobStore
+                scheduler = BackgroundScheduler(
+                    jobstores={
+                        'default': MemoryJobStore()
+                    }
+                )
+                persistence_type = "Memory (non-persistent)"
+                logger.warning(f"SQLAlchemy job store unavailable ({str(e)[:100]}). Using MemoryJobStore. Jobs will be lost on server restart.")
+            
+            # Run email automation every 15 minutes (for pending confirmations and thank-you emails)
+            scheduler.add_job(
+                lambda: asyncio.run(run_email_automation()),
+                trigger=CronTrigger(minute='*/15'),  # Every 15 minutes
+                id='event_email_automation',
+                name='Event Email Automation',
+                replace_existing=True
+            )
+            
+            scheduler.start()
+            app.state.scheduler = scheduler
+            
+            # Make scheduler accessible globally for registration endpoint
+            import services.event_email_scheduler as email_scheduler_module
+            email_scheduler_module.scheduler = scheduler
+            
+            logger.info(f"Email automation scheduler started (runs every 15 minutes) with {persistence_type}")
+        except Exception as e:
+            logger.warning(f"Failed to start email automation scheduler: {e}. Continuing without email automation.")
+        
         yield
     except Exception as e:
         logger.error(f"Error during lifespan startup: {e}")
@@ -237,7 +284,6 @@ async def debug_routes():
                 "name": getattr(route, 'name', 'Unknown')
             })
     return {"routes": routes, "total_routes": len(routes)}
-    
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(
