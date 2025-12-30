@@ -14,7 +14,7 @@ from services.event_email_service import send_event_email
 logger = logging.getLogger(__name__)
 
 TIMEZONE = pytz.timezone("America/Los_Angeles")
-MIN_REMINDER_HOURS = 2  # Don't send reminder if event is less than 2 hours away
+MIN_REMINDER_HOURS = 0  # Allow reminders even if event is very close (0 = no minimum)
 
 # Global scheduler reference (set by main.py)
 scheduler: Optional[Any] = None
@@ -178,9 +178,6 @@ async def process_pending_confirmations():
                         .execute()
                     )
                     await safe_supabase_operation(update_query, "Failed to update registration")
-                    logger.info(
-                        f"Confirmation sent for registration {reg['id']} ({hours_until_event:.1f}h before event)"
-                    )
                     
                     # Log confirmation email
                     log_query = lambda: (
@@ -198,7 +195,7 @@ async def process_pending_confirmations():
                     await safe_supabase_operation(log_query, "Failed to log email")
                     
                     sent_count += 1
-                    logger.info(f"Confirmation email sent for registration {reg['id']}")
+                    logger.info(f"Confirmation sent for registration {reg['id']} ({hours_until_event:.1f}h before event)")
                 else:
                     # Update with error - set status to 'failed' per your schema
                     update_query = lambda: (
@@ -243,11 +240,11 @@ async def process_pending_confirmations():
 
 
 async def process_reminder_emails():
-    """Send reminder emails exactly 24 hours before event start
+    """Send reminder emails approximately 24 hours before event start
     
     Only processes registrations that:
     - Have confirmation_sent status
-    - Event is between 23.5-24.5 hours away (tight window around 24h)
+    - Event is between 22-26 hours away (wider window to catch reminders)
     - Reminder hasn't been sent yet (reminder_sent_at IS NULL)
     """
     try:
@@ -255,12 +252,12 @@ async def process_reminder_emails():
         now = datetime.now(TIMEZONE)
         now_utc = now.astimezone(pytz.UTC)
         
-        # Calculate reminder window in UTC - tight window around 24 hours
-        # 23.5-24.5 hours gives us 30 min buffer on each side (scheduler runs every 15 min)
-        reminder_window_start_utc = (now_utc + timedelta(hours=23, minutes=30)).isoformat()
-        reminder_window_end_utc = (now_utc + timedelta(hours=24, minutes=30)).isoformat()
+        # Calculate reminder window in UTC - wider window around 24 hours
+        # 22-26 hours gives us a 2-hour buffer on each side to catch reminders
+        reminder_window_start_utc = (now_utc + timedelta(hours=22)).isoformat()
+        reminder_window_end_utc = (now_utc + timedelta(hours=26)).isoformat()
         
-        logger.info(f"Checking for reminders: events starting between {reminder_window_start_utc} and {reminder_window_end_utc}")
+        logger.debug(f"Checking for reminders: events starting between {reminder_window_start_utc} and {reminder_window_end_utc}")
         
         # Fetch all candidates (filter by status, then check timing in Python for accuracy)
         query = lambda: (
@@ -287,10 +284,9 @@ async def process_reminder_emails():
         response = await safe_supabase_operation(query, "Failed to fetch reminder candidates")
         
         if not response.data:
-            logger.info("No reminder candidates found")
             return 0
         
-        logger.info(f"Found {len(response.data)} reminder candidates to check")
+        logger.debug(f"Found {len(response.data)} reminder candidates to check")
         
         sent_count = 0
         
@@ -343,10 +339,11 @@ async def process_reminder_emails():
                     )
                     continue
                 
-                # Only send if event is 23.5-24.5 hours away (tight window around 24h)
-                if hours_until_event < 23.5 or hours_until_event > 24.5:
+                # Only send if event is 22-26 hours away (wider window to catch reminders)
+                # This ensures we don't miss reminders if the periodic check runs slightly off-schedule
+                if hours_until_event < 22 or hours_until_event > 26:
                     logger.debug(
-                        f"Skipping reminder for {reg['id']}: event is {hours_until_event:.1f}h away (need 23.5-24.5h, will check again later)"
+                        f"Skipping reminder for {reg['id']}: event is {hours_until_event:.1f}h away (need 22-26h, will check again later)"
                     )
                     continue
                 
@@ -395,9 +392,7 @@ async def process_reminder_emails():
                     await safe_supabase_operation(log_query, "Failed to log reminder")
                     
                     sent_count += 1
-                    logger.info(
-                        f"Reminder sent for {reg['id']} ({hours_until_event:.1f}h before event)"
-                    )
+                    logger.info(f"Reminder sent for registration {reg['id']} ({hours_until_event:.1f}h before event)")
                 else:
                     logger.error(f"Failed to send reminder for {reg['id']}: {result['error']}")
                     # Update error but keep status as confirmation_sent
@@ -416,10 +411,8 @@ async def process_reminder_emails():
                 logger.error(f"Error processing reminder for {reg.get('id', 'unknown')}: {e}")
                 continue
         
-        if sent_count == 0:
-            logger.info(f"No reminder emails sent (checked {len(response.data)} candidates)")
-        else:
-            logger.info(f"Successfully sent {sent_count} reminder emails")
+        if sent_count > 0:
+            logger.info(f"Sent {sent_count} reminder emails")
         return sent_count
         
     except Exception as e:
@@ -439,7 +432,7 @@ async def process_thank_you_emails():
         start_window = target_time - timedelta(minutes=30)  # 23.5 hours ago
         end_window = target_time + timedelta(minutes=30)   # 24.5 hours ago
         
-        logger.info(f"Checking for thank-you emails: events that started between {start_window.isoformat()} and {end_window.isoformat()}")
+        logger.debug(f"Checking for thank-you emails: events that started between {start_window.isoformat()} and {end_window.isoformat()}")
         
         query = lambda: (
             supabase
@@ -562,18 +555,14 @@ async def process_thank_you_emails():
                     await safe_supabase_operation(log_query, "Failed to log thank-you")
                     
                     sent_count += 1
-                    logger.info(
-                        f"Thank-you sent for {reg['id']} ({hours_since_event:.1f}h after event start)"
-                    )
+                    logger.info(f"Thank-you sent for registration {reg['id']} ({hours_since_event:.1f}h after event start)")
                     
             except Exception as e:
                 logger.error(f"Error processing thank-you for {reg.get('id', 'unknown')}: {e}")
                 continue
         
-        if sent_count == 0:
-            logger.info(f"No thank-you emails sent (checked {len(response.data)} candidates)")
-        else:
-            logger.info(f"Successfully sent {sent_count} thank-you emails")
+        if sent_count > 0:
+            logger.info(f"Sent {sent_count} thank-you emails")
         return sent_count
         
     except Exception as e:
@@ -682,9 +671,100 @@ async def reschedule_reminders_for_event(event_id: str, new_event_time: datetime
         return 0
 
 
+async def reschedule_pending_reminders():
+    """Re-schedule reminder jobs for all registrations that haven't received reminders yet.
+    Useful after server restart or when switching from MemoryJobStore to persistent storage.
+    """
+    try:
+        if scheduler is None:
+            logger.warning("Scheduler not available, cannot reschedule reminders")
+            return 0
+        
+        supabase = get_supabase_client()
+        now = datetime.now(TIMEZONE)
+        
+        # Get all registrations that need reminders
+        query = lambda: (
+            supabase
+            .table("event_registrations")
+            .select("""
+                id,
+                event_id,
+                events!inner(
+                    id,
+                    date_time
+                )
+            """)
+            .eq("email_status", "confirmation_sent")
+            .is_("reminder_sent_at", "null")
+            .limit(500)
+            .execute()
+        )
+        
+        response = await safe_supabase_operation(query, "Failed to fetch pending reminders")
+        
+        if not response.data:
+            return 0
+        
+        logger.info(f"Rescheduling reminders for {len(response.data)} registrations")
+        
+        rescheduled_count = 0
+        from apscheduler.triggers.date import DateTrigger
+        import asyncio
+        
+        for reg in response.data:
+            try:
+                registration_id = reg["id"]
+                event_data = reg.get("events")
+                
+                if not event_data:
+                    continue
+                
+                # Calculate reminder time
+                event_start = datetime.fromisoformat(
+                    event_data["date_time"].replace('Z', '+00:00')
+                )
+                if event_start.tzinfo is None:
+                    event_start = pytz.UTC.localize(event_start)
+                event_start_local = event_start.astimezone(TIMEZONE)
+                reminder_time = event_start_local - timedelta(hours=24)
+                
+                # Only schedule if reminder time is in the future and event is more than 2 hours away
+                hours_until_event = (event_start_local - now).total_seconds() / 3600
+                if reminder_time > now and hours_until_event > MIN_REMINDER_HOURS:
+                    reminder_job_id = f'reminder_{registration_id}'
+                    
+                    # Remove old job if it exists
+                    try:
+                        scheduler.remove_job(reminder_job_id)
+                    except Exception:
+                        pass
+                    
+                    # Schedule new reminder job
+                    scheduler.add_job(
+                        lambda rid=registration_id: asyncio.run(send_reminder_for_registration(rid)),
+                        trigger=DateTrigger(run_date=reminder_time),
+                        id=reminder_job_id,
+                        replace_existing=True
+                    )
+                    rescheduled_count += 1
+                    logger.debug(f"Rescheduled reminder for registration {registration_id} at {reminder_time}")
+            except Exception as e:
+                logger.error(f"Error rescheduling reminder for registration {reg.get('id', 'unknown')}: {e}")
+                continue
+        
+        if rescheduled_count > 0:
+            logger.info(f"Rescheduled {rescheduled_count} reminder jobs")
+        return rescheduled_count
+        
+    except Exception as e:
+        logger.error(f"Error in reschedule_pending_reminders: {e}")
+        return 0
+
+
 async def send_thank_you_for_registration(registration_id: str):
     """Send thank-you email for a specific registration (called by scheduled job)"""
-    logger.info(f"Thank-you job executed for registration {registration_id}")
+    logger.debug(f"Thank-you job executed for registration {registration_id}")
     try:
         supabase = get_supabase_client()
         
@@ -771,11 +851,7 @@ async def send_thank_you_for_registration(registration_id: str):
             )
             return False
         
-        # Log that we're proceeding with thank-you
-        logger.info(
-            f"Sending thank-you for registration {registration_id}. "
-            f"Event started {hours_since_event:.1f}h ago."
-        )
+        logger.debug(f"Sending thank-you for registration {registration_id} ({hours_since_event:.1f}h after event)")
         
         event_date, event_time = format_datetime(event_data["date_time"])
         
@@ -841,7 +917,7 @@ async def send_thank_you_for_registration(registration_id: str):
 
 async def send_reminder_for_registration(registration_id: str):
     """Send reminder email for a specific registration (called by scheduled job)"""
-    logger.info(f"Reminder job executed for registration {registration_id}")
+    logger.debug(f"Reminder job executed for registration {registration_id}")
     try:
         supabase = get_supabase_client()
         
@@ -930,11 +1006,7 @@ async def send_reminder_for_registration(registration_id: str):
             )
             return False
         
-        # Log that we're proceeding with reminder
-        logger.info(
-            f"Sending reminder for registration {registration_id}. "
-            f"Event is {hours_until_event:.1f}h away."
-        )
+        logger.debug(f"Sending reminder for registration {registration_id} ({hours_until_event:.1f}h before event)")
         
         event_date, event_time = format_datetime(event_data["date_time"])
         

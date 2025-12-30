@@ -462,6 +462,41 @@ async def get_event_attendees(event_id: str):
         logging.error(f"Error getting event attendees: {e}")
         raise HTTPException(status_code=500, detail=f"Error getting attendees: {e}")
 
+@event_registration_router.post("/trigger-reminder/{registration_id}")
+async def trigger_reminder_manually(registration_id: str, admin: dict = Depends(verify_admin_token)):
+    """
+    Manually trigger a reminder email for a specific registration.
+    Admin only endpoint.
+    """
+    try:
+        from services.event_email_scheduler import send_reminder_for_registration
+        
+        result = await send_reminder_for_registration(registration_id)
+        
+        if result:
+            return {"success": True, "message": f"Reminder sent for registration {registration_id}"}
+        else:
+            return {"success": False, "message": f"Failed to send reminder for registration {registration_id}. Check logs for details."}
+    except Exception as e:
+        logging.error(f"Error manually triggering reminder: {e}")
+        raise HTTPException(status_code=500, detail=f"Error triggering reminder: {str(e)}")
+
+@event_registration_router.post("/reschedule-pending-reminders")
+async def reschedule_pending_reminders_endpoint(admin: dict = Depends(verify_admin_token)):
+    """
+    Re-schedule reminder jobs for all registrations that haven't received reminders yet.
+    Useful after server restart or when switching from MemoryJobStore to persistent storage.
+    Admin only endpoint.
+    """
+    try:
+        from services.event_email_scheduler import reschedule_pending_reminders
+        
+        count = await reschedule_pending_reminders()
+        return {"success": True, "message": f"Re-scheduled {count} reminder jobs"}
+    except Exception as e:
+        logging.error(f"Error rescheduling pending reminders: {e}")
+        raise HTTPException(status_code=500, detail=f"Error rescheduling reminders: {str(e)}")
+
 @event_registration_router.get("/event-registered-users/{event_id}")
 async def get_event_registered_users(event_id: str):
     """
@@ -673,6 +708,98 @@ async def resend_registration_email(registration_id: str):
     except Exception as e:
         logging.error(f"Error resending email: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to resend email: {str(e)}")
+
+@event_registration_router.post("/debug/start-scheduler")
+async def start_scheduler_manually(admin: dict = Depends(verify_admin_token)):
+    """
+    Manually start the scheduler if it's not running.
+    Admin only endpoint.
+    """
+    try:
+        from services.event_email_scheduler import scheduler
+        
+        if scheduler is None:
+            return {
+                "status": "error",
+                "message": "Scheduler not initialized"
+            }
+        
+        if scheduler.running:
+            return {
+                "status": "ok",
+                "message": "Scheduler is already running",
+                "scheduler_running": True
+            }
+        
+        # Try to start the scheduler
+        try:
+            scheduler.start()
+            return {
+                "status": "ok",
+                "message": "Scheduler started successfully",
+                "scheduler_running": scheduler.running,
+                "jobs_count": len(scheduler.get_jobs())
+            }
+        except Exception as e:
+            logging.error(f"Error starting scheduler: {e}", exc_info=True)
+            return {
+                "status": "error",
+                "message": f"Failed to start scheduler: {str(e)}",
+                "scheduler_running": scheduler.running
+            }
+    except Exception as e:
+        logging.error(f"Error in start_scheduler_manually: {e}", exc_info=True)
+        return {
+            "status": "error",
+            "error": str(e)
+        }
+
+@event_registration_router.get("/debug/scheduler-status")
+async def debug_scheduler_status():
+    """
+    Debug endpoint to check scheduler status and scheduled jobs
+    """
+    try:
+        from services.event_email_scheduler import scheduler
+        
+        if scheduler is None:
+            return {
+                "status": "error",
+                "message": "Scheduler not initialized",
+                "scheduler_available": False
+            }
+        
+        jobs = []
+        for job in scheduler.get_jobs():
+            job_info = {
+                "id": job.id,
+                "name": job.name,
+                "trigger": str(job.trigger)
+            }
+            # Some jobs (like DateTrigger) may not have next_run_time after execution
+            try:
+                if hasattr(job, 'next_run_time') and job.next_run_time:
+                    job_info["next_run_time"] = job.next_run_time.isoformat()
+                else:
+                    job_info["next_run_time"] = None
+            except:
+                job_info["next_run_time"] = None
+            jobs.append(job_info)
+        
+        return {
+            "status": "ok",
+            "scheduler_available": True,
+            "scheduler_running": scheduler.running,
+            "total_jobs": len(jobs),
+            "jobs": jobs
+        }
+    except Exception as e:
+        logging.error(f"Error checking scheduler status: {e}", exc_info=True)
+        return {
+            "status": "error",
+            "error": str(e),
+            "scheduler_available": False
+        }
 
 @event_registration_router.get("/debug/event-registrations")
 async def debug_event_registrations():

@@ -17,7 +17,8 @@ html2text==2025.4.15
 python-dotenv==1.1.0
 pydantic-settings
 apscheduler==3.11.0
-sqlalchemy==2.0.23
+sqlalchemy==1.4.23
+psycopg2-binary>=2.9.10
 webdriver-manager==4.0.2
 supabase==2.15.0
 backoff==2.2.1

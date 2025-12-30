@@ -1,4 +1,5 @@
 import os
+import re
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -25,6 +26,28 @@ SUPABASE_SERVICE_KEY = os.getenv("CSA_SUPABASE_SERVICE_KEY")
 SUPABASE_REDIRECT_URL = os.getenv("CSA_SUPABASE_REDIRECT_URL")
 JWT_SECRET_KEY = os.getenv("CSA_JWT_SECRET_KEY")
 SUPABASE_GOOGLE_PROVIDER = os.getenv("CSA_SUPABASE_GOOGLE_PROVIDER")
+
+# Supabase Database Connection String for APScheduler
+# Constructs from CSA_SUPABASE_URL and CSA_SUPABASE_DB_PASSWORD
+# Format: postgresql://postgres:[PASSWORD]@[PROJECT-REF].supabase.co:5432/postgres
+SUPABASE_DB_URL = None
+if SUPABASE_URL:
+    # Check if CSA_SUPABASE_URL is already a database connection string
+    if SUPABASE_URL.startswith("postgres://") or SUPABASE_URL.startswith("postgresql://"):
+        SUPABASE_DB_URL = SUPABASE_URL.replace("postgres://", "postgresql://", 1)
+    else:
+        # Extract project reference from API URL (e.g., https://ganqwjbdeivsmyekvojt.supabase.co)
+        # and construct database connection string
+        match = re.search(r'https://([^.]+)\.supabase\.co', SUPABASE_URL)
+        if match:
+            project_ref = match.group(1)
+            db_password = os.getenv("CSA_SUPABASE_DB_PASSWORD")
+            if db_password:
+                SUPABASE_DB_URL = f"postgresql://postgres:{db_password}@{project_ref}.supabase.co:5432/postgres"
+            else:
+                print("WARNING: CSA_SUPABASE_DB_PASSWORD not set. Cannot construct database connection string for APScheduler.")
+                print("         Reminder and thank-you emails will not be sent at exact times after server restarts.")
+                print("         To fix: Set CSA_SUPABASE_DB_PASSWORD in your .env file (get it from Supabase Dashboard > Settings > Database)")
 
 # LinkedIn OAuth Configuration
 LINKEDIN_CLIENT_ID = os.getenv("CSA_LINKEDIN_CLIENT_ID")

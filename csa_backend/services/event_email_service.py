@@ -98,6 +98,9 @@ async def send_event_email(
                 user_name=user_name,
                 event_title=event_title,
                 event_date=event_date,
+                event_time=event_time or "TBA",
+                event_location=event_location or "TBA",
+                event_slug=event_slug,
                 frontend_url=frontend_url
             )
             subject = f"Thank You for Attending: {event_title}"

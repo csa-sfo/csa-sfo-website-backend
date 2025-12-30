@@ -1,14 +1,42 @@
-from fastapi import FastAPI, Request
+# Standard library imports
+import asyncio
+import logging
+import threading
+import time
+from contextlib import asynccontextmanager
+from datetime import datetime
+
+# Third-party imports
+from apscheduler.jobstores.memory import MemoryJobStore
+from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
+from fastapi import APIRouter, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse
-import asyncio
-import time
-import logging
-from datetime import datetime
-from app.config_simple import settings
-from contextlib import asynccontextmanager
+from redis.asyncio import Redis
+import uvicorn
 
+# Local application imports
+from app.config_simple import settings
+from config.settings import SUPABASE_DB_URL
+from services.bot_service import (
+    check_for_updates,
+    check_index_stats,
+    get_urls,
+    initialize_events_content,
+    initialize_sales_content,
+    initialize_website_content,
+    load_hashes,
+)
+from services.cache_service import init_redis_client
+from services.event_email_scheduler import (
+    reschedule_pending_reminders,
+    run_email_automation,
+)
+import services.event_email_scheduler as email_scheduler_module
+from services.sales_content_check import sales_content_changed
 
 # Configure logging
 logging.basicConfig(
@@ -22,22 +50,13 @@ try:
     from routes_register import router as api_router
     from routers.payments import payment_router
     from routers.router import message_router
-    from services.bot_service import initialize_website_content, initialize_events_content, initialize_sales_content, load_hashes, check_for_updates, get_urls, check_index_stats
 except ImportError as e:
     logger.error(f"Failed to import required modules: {e}")
     # Create empty routers if imports fail
-    from fastapi import APIRouter
     api_router = APIRouter()
     payment_router = APIRouter()
     message_router = APIRouter()
     logger.warning("Using empty routers due to import failure")
-
-from apscheduler.schedulers.background import BackgroundScheduler   
-from services.sales_content_check import sales_content_changed
-import uvicorn
-
-from redis.asyncio import Redis
-from services.cache_service import init_redis_client
 
 # Define lifespan manager first
 @asynccontextmanager
@@ -57,7 +76,6 @@ async def lifespan(app: FastAPI):
 
         global hashes
         try:
-            from services.bot_service import initialize_website_content, initialize_sales_content, load_hashes, check_for_updates, get_urls, check_index_stats
             hashes = load_hashes()
             stats = check_index_stats()
             website_count = stats["namespaces"].get("website", {}).get("vector_count", 0)
@@ -98,29 +116,27 @@ async def lifespan(app: FastAPI):
         
         # Email automation scheduler
         try:
-            from apscheduler.schedulers.background import BackgroundScheduler
-            from apscheduler.triggers.cron import CronTrigger
-            from services.event_email_scheduler import run_email_automation
-            
-            # Try to use SQLite job store for persistence, fallback to MemoryJobStore
+            # Try to use Supabase PostgreSQL job store for persistence, fallback to MemoryJobStore
             try:
-                from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
+                if not SUPABASE_DB_URL:
+                    raise ValueError("SUPABASE_DB_URL not configured")
+                
                 scheduler = BackgroundScheduler(
                     jobstores={
-                        'default': SQLAlchemyJobStore(url='sqlite:///jobs.sqlite')
+                        'default': SQLAlchemyJobStore(url=SUPABASE_DB_URL)
                     }
                 )
-                persistence_type = "SQLite (persistent)"
-            except (ImportError, Exception) as e:
-                # Fallback to MemoryJobStore if SQLAlchemy not available or has compatibility issues
-                from apscheduler.jobstores.memory import MemoryJobStore
+                persistence_type = "Supabase PostgreSQL (persistent)"
+                logger.info("Using Supabase PostgreSQL for APScheduler job store")
+            except (ImportError, ValueError, Exception) as e:
                 scheduler = BackgroundScheduler(
                     jobstores={
                         'default': MemoryJobStore()
                     }
                 )
                 persistence_type = "Memory (non-persistent)"
-                logger.warning(f"SQLAlchemy job store unavailable ({str(e)[:100]}). Using MemoryJobStore. Jobs will be lost on server restart.")
+                error_msg = str(e)[:100] if str(e) else "Unknown error"
+                logger.warning(f"Supabase PostgreSQL job store unavailable ({error_msg}). Using MemoryJobStore. Jobs will be lost on server restart.")
             
             # Run email automation every 15 minutes (for pending confirmations and thank-you emails)
             scheduler.add_job(
@@ -131,14 +147,52 @@ async def lifespan(app: FastAPI):
                 replace_existing=True
             )
             
-            scheduler.start()
+            logger.info("Starting scheduler (may take a moment to connect to database)...")
+            
+            start_complete = threading.Event()
+            start_error_holder = [None]
+            
+            def start_in_thread():
+                try:
+                    scheduler.start()
+                    start_complete.set()
+                except Exception as e:
+                    start_error_holder[0] = e
+                    start_complete.set()
+            
+            start_thread = threading.Thread(target=start_in_thread, daemon=True)
+            start_thread.start()
+            
+            # Wait up to 5 seconds for scheduler to start
+            if start_complete.wait(timeout=5):
+                if start_error_holder[0]:
+                    logger.error(f"Error starting scheduler: {start_error_holder[0]}", exc_info=True)
+                    raise start_error_holder[0]
+                logger.info("Scheduler started successfully")
+            else:
+                logger.warning("Scheduler start is taking longer than expected, continuing anyway...")
+                # Check if it started in the background
+                time.sleep(1)
+                if scheduler.running:
+                    logger.info("Scheduler started (took longer than expected)")
+                else:
+                    logger.warning("Scheduler may not have started - jobs may not persist")
+            
             app.state.scheduler = scheduler
             
             # Make scheduler accessible globally for registration endpoint
-            import services.event_email_scheduler as email_scheduler_module
             email_scheduler_module.scheduler = scheduler
             
             logger.info(f"Email automation scheduler started (runs every 15 minutes) with {persistence_type}")
+            
+            # Re-schedule any pending reminders that may have been lost (e.g., from MemoryJobStore)
+            if persistence_type == "Supabase PostgreSQL (persistent)":
+                try:
+                    rescheduled = await reschedule_pending_reminders()
+                    if rescheduled > 0:
+                        logger.info(f"Re-scheduled {rescheduled} reminder jobs for existing registrations")
+                except Exception as e:
+                    logger.error(f"Failed to reschedule pending reminders on startup: {e}", exc_info=True)
         except Exception as e:
             logger.warning(f"Failed to start email automation scheduler: {e}. Continuing without email automation.")
         
@@ -151,8 +205,7 @@ async def lifespan(app: FastAPI):
         if hasattr(app.state, 'scheduler'):
             app.state.scheduler.shutdown()
         if hasattr(app.state, 'redis'):
-            app.state.redis.close()     
-        pass
+            app.state.redis.close()
 
 # Create the FastAPI app once
 app = FastAPI(
@@ -284,8 +337,8 @@ async def debug_routes():
                 "name": getattr(route, 'name', 'Unknown')
             })
     return {"routes": routes, "total_routes": len(routes)}
+
 if __name__ == "__main__":
-    import uvicorn
     uvicorn.run(
         "main:app",
         host=settings.host,
