@@ -8,6 +8,7 @@ from typing import Optional, Dict, Any
 import logging
 from datetime import datetime
 import os
+import json
 
 from config.settings import (
     AWS_ACCESS_KEY_ID,
@@ -17,10 +18,15 @@ from config.settings import (
     AWS_SES_FROM_NAME,
     FRONTEND_URL,
 )
+import os
+
+# Test mode - set CSA_EMAIL_TEST_MODE=true in .env to log emails instead of sending
+EMAIL_TEST_MODE = os.getenv("CSA_EMAIL_TEST_MODE", "false").lower() == "true"
 from services.event_email_templates import (
     generate_confirmation_email,
     generate_reminder_email,
     generate_thank_you_email,
+    generate_event_update_email,
 )
 
 logger = logging.getLogger(__name__)
@@ -45,7 +51,7 @@ def get_ses_client():
 
 
 async def send_event_email(
-    email_type: str,  # 'confirmation', 'reminder', 'thank_you'
+    email_type: str,  # 'confirmation', 'reminder', 'thank_you', 'update'
     to_email: str,
     user_name: str,
     event_title: str,
@@ -53,7 +59,8 @@ async def send_event_email(
     event_time: Optional[str] = None,
     event_location: Optional[str] = None,
     event_slug: Optional[str] = None,
-    frontend_url: Optional[str] = None
+    frontend_url: Optional[str] = None,
+    changes: Optional[dict] = None  # For 'update' email type
 ) -> Dict[str, Any]:
     """
     Send event-related email via AWS SES
@@ -61,6 +68,30 @@ async def send_event_email(
     Returns:
         dict with 'success' (bool), 'message_id' (str), 'error' (str)
     """
+    # Test mode: Log email instead of sending
+    if EMAIL_TEST_MODE:
+        logger.info("=" * 80)
+        logger.info("📧 TEST MODE - EMAIL LOGGED (NOT SENT)")
+        logger.info("=" * 80)
+        logger.info(f"Email Type: {email_type}")
+        logger.info(f"To: {to_email}")
+        logger.info(f"User Name: {user_name}")
+        logger.info(f"Event Title: {event_title}")
+        logger.info(f"Event Date: {event_date}")
+        logger.info(f"Event Time: {event_time}")
+        logger.info(f"Event Location: {event_location}")
+        if changes:
+            logger.info(f"Changes: {json.dumps(changes, indent=2)}")
+        logger.info("=" * 80)
+        logger.info("✅ Email would be sent in production mode")
+        logger.info("=" * 80)
+        
+        return {
+            'success': True,
+            'message_id': f'test-{datetime.now().timestamp()}',
+            'error': None
+        }
+    
     try:
         ses_client = get_ses_client()
         
@@ -104,6 +135,21 @@ async def send_event_email(
                 frontend_url=frontend_url
             )
             subject = f"Thank You for Attending: {event_title}"
+            
+        elif email_type == 'update':
+            if not changes:
+                raise ValueError("changes parameter is required for 'update' email type")
+            html_body, text_body = generate_event_update_email(
+                user_name=user_name,
+                event_title=event_title,
+                event_date=event_date,
+                event_time=event_time or "TBA",
+                event_location=event_location or "TBA",
+                changes=changes,
+                event_slug=event_slug,
+                frontend_url=frontend_url
+            )
+            subject = f"Event Update: {event_title}"
         else:
             raise ValueError(f"Invalid email_type: {email_type}")
         

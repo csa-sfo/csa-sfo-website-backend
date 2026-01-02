@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 import pytz
 from services.auth_services import verify_admin_token
 from services.event_email_service import send_event_email
+from services.event_email_scheduler import send_confirmation_and_reminder_together, format_datetime
 
 # Initialize router
 event_registration_router = APIRouter()
@@ -107,77 +108,67 @@ async def create_event_registration(registration: EventRegistrationRequest):
                 event_start = pytz.UTC.localize(event_start)
             event_start_local = event_start.astimezone(timezone)
             
-            event_date = event_start_local.strftime("%B %d, %Y")
-            event_time = event_start_local.strftime("%I:%M %p %Z")
+            event_date, event_time = format_datetime(event_data["date_time"])
             
             # Calculate hours until event
             now = datetime.now(timezone)
             hours_until_event = (event_start_local - now).total_seconds() / 3600
             
-            # Send confirmation email
-            email_result = await send_event_email(
-                email_type="confirmation",
-                to_email=user_email,
-                user_name=user_name,
-                event_title=event_data["title"],
-                event_date=event_date,
-                event_time=event_time,
-                event_location=event_data.get("location", "TBA"),
-                event_slug=event_data.get("slug")
-            )
+            # Check if event is within 24 hours or happening tomorrow
+            tomorrow = now + timedelta(days=1)
+            is_within_24h = hours_until_event < 24 and hours_until_event > 0
+            is_tomorrow = event_start_local.date() == tomorrow.date() and event_start_local > now
             
-            if email_result["success"]:
-                # Only send confirmation - reminder will be sent by scheduler 24h before event
-                supabase.table("event_registrations").update({
-                    "email_status": "confirmation_sent",
-                    "confirmation_sent_at": datetime.utcnow().isoformat()
-                }).eq("id", registration_id).execute()
-                logging.info(f"Confirmation email sent for registration {registration_id}")
+            # If within 24 hours or happening tomorrow, send both confirmation and reminder
+            if is_within_24h or is_tomorrow:
+                logging.info(f"Event within 24h or tomorrow for registration {registration_id}, sending both confirmation and reminder")
+                email_result = await send_confirmation_and_reminder_together(
+                    registration_id=registration_id,
+                    user_email=user_email,
+                    user_name=user_name,
+                    event_title=event_data["title"],
+                    event_date=event_date,
+                    event_time=event_time,
+                    event_location=event_data.get("location", "TBA"),
+                    event_slug=event_data.get("slug")
+                )
                 
-                # Schedule reminder and thank-you emails
-                try:
-                    from apscheduler.triggers.date import DateTrigger
-                    from services.event_email_scheduler import send_reminder_for_registration, send_thank_you_for_registration, scheduler
-                    import asyncio
-                    
-                    # Schedule reminder email 24 hours before event
-                    reminder_time = event_start_local - timedelta(hours=24)
-                    if reminder_time > now and scheduler is not None:
-                        scheduler.add_job(
-                            lambda: asyncio.run(send_reminder_for_registration(registration_id)),
-                            trigger=DateTrigger(run_date=reminder_time),
-                            id=f'reminder_{registration_id}',
-                            replace_existing=True
-                        )
-                        logging.info(f"Scheduled reminder for registration {registration_id} at {reminder_time}")
-                    elif reminder_time <= now:
-                        logging.info(f"Event is less than 24h away, skipping reminder scheduling for {registration_id}")
-                    
-                    # Schedule thank-you email 24 hours after event start
-                    thank_you_time = event_start_local + timedelta(hours=24)
-                    if thank_you_time > now and scheduler is not None:
-                        scheduler.add_job(
-                            lambda: asyncio.run(send_thank_you_for_registration(registration_id)),
-                            trigger=DateTrigger(run_date=thank_you_time),
-                            id=f'thank_you_{registration_id}',
-                            replace_existing=True
-                        )
-                        logging.info(f"Scheduled thank-you for registration {registration_id} at {thank_you_time}")
-                    elif thank_you_time <= now:
-                        logging.info(f"Event already passed 24h, skipping thank-you scheduling for {registration_id}")
-                    
-                    if scheduler is None:
-                        logging.warning(f"Scheduler not available, emails will be handled by polling")
-                except Exception as schedule_error:
-                    logging.warning(f"Failed to schedule emails for {registration_id}: {schedule_error}")
-                    # Don't fail registration if scheduling fails - polling will handle it
+                if email_result["success"]:
+                    logging.info(f"Confirmation and reminder emails sent together for registration {registration_id}")
+                else:
+                    # Update with error
+                    supabase.table("event_registrations").update({
+                        "email_status": "failed",
+                        "email_error": email_result.get("error", "Unknown error")
+                    }).eq("id", registration_id).execute()
+                    logging.error(f"Failed to send emails for {registration_id}: {email_result.get('error')}")
             else:
-                # Email failed but registration succeeded
-                supabase.table("event_registrations").update({
-                    "email_status": "failed",
-                    "email_error": email_result.get("error", "Unknown error")
-                }).eq("id", registration_id).execute()
-                logging.error(f"Failed to send confirmation email for {registration_id}: {email_result.get('error')}")
+                # Send only confirmation email (reminder will be sent by daily job)
+                email_result = await send_event_email(
+                    email_type="confirmation",
+                    to_email=user_email,
+                    user_name=user_name,
+                    event_title=event_data["title"],
+                    event_date=event_date,
+                    event_time=event_time,
+                    event_location=event_data.get("location", "TBA"),
+                    event_slug=event_data.get("slug")
+                )
+                
+                if email_result["success"]:
+                    # Confirmation sent - reminder and thank-you emails will be handled by daily check
+                    supabase.table("event_registrations").update({
+                        "email_status": "confirmation_sent",
+                        "confirmation_sent_at": datetime.utcnow().isoformat()
+                    }).eq("id", registration_id).execute()
+                    logging.info(f"Confirmation email sent for registration {registration_id}")
+                else:
+                    # Email failed but registration succeeded
+                    supabase.table("event_registrations").update({
+                        "email_status": "failed",
+                        "email_error": email_result.get("error", "Unknown error")
+                    }).eq("id", registration_id).execute()
+                    logging.error(f"Failed to send confirmation email for {registration_id}: {email_result.get('error')}")
         except Exception as email_error:
             # Log error but don't fail registration
             logging.error(f"Error sending confirmation email for {registration_id}: {email_error}")
@@ -346,73 +337,62 @@ async def simple_event_registration(registration: EventRegistrationRequest):
                 event_start = pytz.UTC.localize(event_start)
             event_start_local = event_start.astimezone(timezone)
             
-            event_date = event_start_local.strftime("%B %d, %Y")
-            event_time = event_start_local.strftime("%I:%M %p %Z")
+            event_date, event_time = format_datetime(event_data["date_time"])
             
             now = datetime.now(timezone)
             hours_until_event = (event_start_local - now).total_seconds() / 3600
             
-            email_result = await send_event_email(
-                email_type="confirmation",
-                to_email=user_email,
-                user_name=user_name,
-                event_title=event_data["title"],
-                event_date=event_date,
-                event_time=event_time,
-                event_location=event_data.get("location", "TBA"),
-                event_slug=event_data.get("slug")
-            )
+            # Check if event is within 24 hours or happening tomorrow
+            tomorrow = now + timedelta(days=1)
+            is_within_24h = hours_until_event < 24 and hours_until_event > 0
+            is_tomorrow = event_start_local.date() == tomorrow.date() and event_start_local > now
             
-            if email_result["success"]:
-                # Only send confirmation - reminder will be sent by scheduler 24h before event
-                supabase.table("event_registrations").update({
-                    "email_status": "confirmation_sent",
-                    "confirmation_sent_at": datetime.utcnow().isoformat()
-                }).eq("id", registration_id).execute()
-                logging.info(f"Confirmation email sent for registration {registration_id}")
+            # If within 24 hours or happening tomorrow, send both confirmation and reminder
+            if is_within_24h or is_tomorrow:
+                logging.info(f"Event within 24h or tomorrow for registration {registration_id}, sending both confirmation and reminder")
+                email_result = await send_confirmation_and_reminder_together(
+                    registration_id=registration_id,
+                    user_email=user_email,
+                    user_name=user_name,
+                    event_title=event_data["title"],
+                    event_date=event_date,
+                    event_time=event_time,
+                    event_location=event_data.get("location", "TBA"),
+                    event_slug=event_data.get("slug")
+                )
                 
-                # Schedule reminder and thank-you emails
-                try:
-                    from apscheduler.triggers.date import DateTrigger
-                    from services.event_email_scheduler import send_reminder_for_registration, send_thank_you_for_registration, scheduler
-                    import asyncio
-                    
-                    # Schedule reminder email 24 hours before event
-                    reminder_time = event_start_local - timedelta(hours=24)
-                    if reminder_time > now and scheduler is not None:
-                        scheduler.add_job(
-                            lambda: asyncio.run(send_reminder_for_registration(registration_id)),
-                            trigger=DateTrigger(run_date=reminder_time),
-                            id=f'reminder_{registration_id}',
-                            replace_existing=True
-                        )
-                        logging.info(f"Scheduled reminder for registration {registration_id} at {reminder_time}")
-                    elif reminder_time <= now:
-                        logging.info(f"Event is less than 24h away, skipping reminder scheduling for {registration_id}")
-                    
-                    # Schedule thank-you email 24 hours after event start
-                    thank_you_time = event_start_local + timedelta(hours=24)
-                    if thank_you_time > now and scheduler is not None:
-                        scheduler.add_job(
-                            lambda: asyncio.run(send_thank_you_for_registration(registration_id)),
-                            trigger=DateTrigger(run_date=thank_you_time),
-                            id=f'thank_you_{registration_id}',
-                            replace_existing=True
-                        )
-                        logging.info(f"Scheduled thank-you for registration {registration_id} at {thank_you_time}")
-                    elif thank_you_time <= now:
-                        logging.info(f"Event already passed 24h, skipping thank-you scheduling for {registration_id}")
-                    
-                    if scheduler is None:
-                        logging.warning(f"Scheduler not available, emails will be handled by polling")
-                except Exception as schedule_error:
-                    logging.warning(f"Failed to schedule emails for {registration_id}: {schedule_error}")
-                    # Don't fail registration if scheduling fails - polling will handle it
+                if email_result["success"]:
+                    logging.info(f"Confirmation and reminder emails sent together for registration {registration_id}")
+                else:
+                    supabase.table("event_registrations").update({
+                        "email_status": "failed",
+                        "email_error": email_result.get("error", "Unknown error")
+                    }).eq("id", registration_id).execute()
             else:
-                supabase.table("event_registrations").update({
-                    "email_status": "failed",
-                    "email_error": email_result.get("error", "Unknown error")
-                }).eq("id", registration_id).execute()
+                # Send only confirmation email (reminder will be sent by daily job)
+                email_result = await send_event_email(
+                    email_type="confirmation",
+                    to_email=user_email,
+                    user_name=user_name,
+                    event_title=event_data["title"],
+                    event_date=event_date,
+                    event_time=event_time,
+                    event_location=event_data.get("location", "TBA"),
+                    event_slug=event_data.get("slug")
+                )
+                
+                if email_result["success"]:
+                    # Confirmation sent - reminder and thank-you emails will be handled by daily check
+                    supabase.table("event_registrations").update({
+                        "email_status": "confirmation_sent",
+                        "confirmation_sent_at": datetime.utcnow().isoformat()
+                    }).eq("id", registration_id).execute()
+                    logging.info(f"Confirmation email sent for registration {registration_id}")
+                else:
+                    supabase.table("event_registrations").update({
+                        "email_status": "failed",
+                        "email_error": email_result.get("error", "Unknown error")
+                    }).eq("id", registration_id).execute()
         except Exception as email_error:
             logging.error(f"Error sending email for {registration_id}: {email_error}")
             supabase.table("event_registrations").update({
@@ -461,41 +441,6 @@ async def get_event_attendees(event_id: str):
     except Exception as e:
         logging.error(f"Error getting event attendees: {e}")
         raise HTTPException(status_code=500, detail=f"Error getting attendees: {e}")
-
-@event_registration_router.post("/trigger-reminder/{registration_id}")
-async def trigger_reminder_manually(registration_id: str, admin: dict = Depends(verify_admin_token)):
-    """
-    Manually trigger a reminder email for a specific registration.
-    Admin only endpoint.
-    """
-    try:
-        from services.event_email_scheduler import send_reminder_for_registration
-        
-        result = await send_reminder_for_registration(registration_id)
-        
-        if result:
-            return {"success": True, "message": f"Reminder sent for registration {registration_id}"}
-        else:
-            return {"success": False, "message": f"Failed to send reminder for registration {registration_id}. Check logs for details."}
-    except Exception as e:
-        logging.error(f"Error manually triggering reminder: {e}")
-        raise HTTPException(status_code=500, detail=f"Error triggering reminder: {str(e)}")
-
-@event_registration_router.post("/reschedule-pending-reminders")
-async def reschedule_pending_reminders_endpoint(admin: dict = Depends(verify_admin_token)):
-    """
-    Re-schedule reminder jobs for all registrations that haven't received reminders yet.
-    Useful after server restart or when switching from MemoryJobStore to persistent storage.
-    Admin only endpoint.
-    """
-    try:
-        from services.event_email_scheduler import reschedule_pending_reminders
-        
-        count = await reschedule_pending_reminders()
-        return {"success": True, "message": f"Re-scheduled {count} reminder jobs"}
-    except Exception as e:
-        logging.error(f"Error rescheduling pending reminders: {e}")
-        raise HTTPException(status_code=500, detail=f"Error rescheduling reminders: {str(e)}")
 
 @event_registration_router.get("/event-registered-users/{event_id}")
 async def get_event_registered_users(event_id: str):
@@ -708,98 +653,6 @@ async def resend_registration_email(registration_id: str):
     except Exception as e:
         logging.error(f"Error resending email: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to resend email: {str(e)}")
-
-@event_registration_router.post("/debug/start-scheduler")
-async def start_scheduler_manually(admin: dict = Depends(verify_admin_token)):
-    """
-    Manually start the scheduler if it's not running.
-    Admin only endpoint.
-    """
-    try:
-        from services.event_email_scheduler import scheduler
-        
-        if scheduler is None:
-            return {
-                "status": "error",
-                "message": "Scheduler not initialized"
-            }
-        
-        if scheduler.running:
-            return {
-                "status": "ok",
-                "message": "Scheduler is already running",
-                "scheduler_running": True
-            }
-        
-        # Try to start the scheduler
-        try:
-            scheduler.start()
-            return {
-                "status": "ok",
-                "message": "Scheduler started successfully",
-                "scheduler_running": scheduler.running,
-                "jobs_count": len(scheduler.get_jobs())
-            }
-        except Exception as e:
-            logging.error(f"Error starting scheduler: {e}", exc_info=True)
-            return {
-                "status": "error",
-                "message": f"Failed to start scheduler: {str(e)}",
-                "scheduler_running": scheduler.running
-            }
-    except Exception as e:
-        logging.error(f"Error in start_scheduler_manually: {e}", exc_info=True)
-        return {
-            "status": "error",
-            "error": str(e)
-        }
-
-@event_registration_router.get("/debug/scheduler-status")
-async def debug_scheduler_status():
-    """
-    Debug endpoint to check scheduler status and scheduled jobs
-    """
-    try:
-        from services.event_email_scheduler import scheduler
-        
-        if scheduler is None:
-            return {
-                "status": "error",
-                "message": "Scheduler not initialized",
-                "scheduler_available": False
-            }
-        
-        jobs = []
-        for job in scheduler.get_jobs():
-            job_info = {
-                "id": job.id,
-                "name": job.name,
-                "trigger": str(job.trigger)
-            }
-            # Some jobs (like DateTrigger) may not have next_run_time after execution
-            try:
-                if hasattr(job, 'next_run_time') and job.next_run_time:
-                    job_info["next_run_time"] = job.next_run_time.isoformat()
-                else:
-                    job_info["next_run_time"] = None
-            except:
-                job_info["next_run_time"] = None
-            jobs.append(job_info)
-        
-        return {
-            "status": "ok",
-            "scheduler_available": True,
-            "scheduler_running": scheduler.running,
-            "total_jobs": len(jobs),
-            "jobs": jobs
-        }
-    except Exception as e:
-        logging.error(f"Error checking scheduler status: {e}", exc_info=True)
-        return {
-            "status": "error",
-            "error": str(e),
-            "scheduler_available": False
-        }
 
 @event_registration_router.get("/debug/event-registrations")
 async def debug_event_registrations():

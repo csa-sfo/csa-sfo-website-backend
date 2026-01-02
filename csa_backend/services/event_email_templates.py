@@ -473,3 +473,172 @@ This is an automated thank you email. Please do not reply to this email.
     """
     
     return html.strip(), plain_text.strip()
+
+
+def generate_event_update_email(
+    user_name: str,
+    event_title: str,
+    event_date: str,
+    event_time: str,
+    event_location: str,
+    changes: dict,
+    event_slug: Optional[str] = None,
+    frontend_url: str = "https://csasfo.com"
+) -> tuple[str, str]:
+    """Generate Event Update Email HTML and plain text
+    
+    Args:
+        changes: Dictionary of changed fields with old and new values
+                 e.g., {'date_time': {'old': '2024-01-01 10:00', 'new': '2024-01-02 14:00'}}
+    """
+    
+    event_url = f"{frontend_url}/events/{event_slug}" if event_slug else None
+    
+    # Build changes list for display
+    changes_list = []
+    if 'title' in changes:
+        changes_list.append(f"<strong>Title:</strong> {changes['title']['old']} → {changes['title']['new']}")
+    if 'date_time' in changes:
+        changes_list.append(f"<strong>Date & Time:</strong> {changes['date_time']['old']} → {changes['date_time']['new']}")
+    if 'location' in changes:
+        changes_list.append(f"<strong>Location:</strong> {changes['location']['old']} → {changes['location']['new']}")
+    if 'description' in changes:
+        changes_list.append(f"<strong>Description:</strong> Updated")
+    if 'capacity' in changes:
+        changes_list.append(f"<strong>Capacity:</strong> {changes['capacity']['old']} → {changes['capacity']['new']}")
+    
+    changes_html = "<br>".join(changes_list) if changes_list else "Event details have been updated."
+    
+    html = f"""
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Event Update</title>
+</head>
+<body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; line-height: 1.6; color: #333333; background-color: #f5f5f5;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color: #f5f5f5; padding: 20px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="600" cellspacing="0" cellpadding="0" border="0" style="max-width: 600px; background: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);">
+          <!-- Header -->
+          <tr>
+            <td bgcolor="#667eea" style="background-color: #667eea; color: #ffffff; padding: 40px 30px; text-align: center;">
+              <div style="width: 60px; height: 60px; background-color: #5a6fd6; border-radius: 50%; margin: 0 auto 15px; line-height: 60px; font-size: 20px; font-weight: bold; color: #ffffff;">CSA</div>
+              <h1 style="font-size: 28px; font-weight: 600; margin: 0; letter-spacing: -0.5px; color: #ffffff;">📢 Event Update</h1>
+            </td>
+          </tr>
+          
+          <!-- Content -->
+          <tr>
+            <td style="padding: 40px 30px;">
+              <p style="font-size: 18px; color: #333333; margin: 0 0 20px 0;">Dear {user_name or 'Valued Member'},</p>
+              
+              <p style="margin: 0 0 20px 0;">We wanted to inform you that there have been some updates to the event you're registered for:</p>
+              
+              <!-- Event Info Box -->
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 8px; margin: 25px 0; overflow: hidden;">
+                <tr>
+                  <td style="padding: 30px; color: #ffffff;">
+                    <h2 style="font-size: 24px; font-weight: 600; margin: 0 0 20px 0; color: #ffffff;">{event_title}</h2>
+                    <div style="font-size: 16px; line-height: 1.8;">
+                      <p style="margin: 8px 0; color: #ffffff;">📅 <strong>Date:</strong> {event_date}</p>
+                      <p style="margin: 8px 0; color: #ffffff;">🕐 <strong>Time:</strong> {event_time}</p>
+                      <p style="margin: 8px 0; color: #ffffff;">📍 <strong>Location:</strong> {event_location}</p>
+                    </div>
+                  </td>
+                </tr>
+              </table>
+              
+              <!-- Changes Box -->
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background: #fff3cd; border-left: 4px solid #ffc107; border-radius: 4px; margin: 25px 0;">
+                <tr>
+                  <td style="padding: 20px;">
+                    <h3 style="color: #856404; font-size: 18px; margin: 0 0 15px 0;">⚠️ What Changed:</h3>
+                    <div style="color: #856404; font-size: 14px; line-height: 1.8;">
+                      {changes_html}
+                    </div>
+                  </td>
+                </tr>
+              </table>
+              
+              <p style="margin: 20px 0;">Please make note of these changes. We apologize for any inconvenience and look forward to seeing you at the event!</p>
+              
+              <!-- CTA Button -->
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+                <tr>
+                  <td align="center" style="padding: 25px 0;">
+                    <a href="{event_url or frontend_url + '/events'}" style="display: inline-block; padding: 14px 32px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: #ffffff; text-decoration: none; border-radius: 6px; font-weight: 600; font-size: 16px;">View Event Details</a>
+                  </td>
+                </tr>
+              </table>
+              
+              <p style="margin: 20px 0 0 0;">Best regards,<br><strong>CSA San Francisco Chapter Team</strong></p>
+            </td>
+          </tr>
+          
+          <!-- Footer -->
+          <tr>
+            <td style="background: #f9f9f9; padding: 30px; text-align: center; border-top: 1px solid #eeeeee;">
+              <p style="margin: 0 0 10px 0; font-size: 14px;"><strong>Cloud Security Alliance - San Francisco Chapter</strong></p>
+              <p style="margin: 0; font-size: 12px; color: #666666;">This is an automated notification email. Please do not reply to this email.</p>
+              <p style="margin: 10px 0 0 0; font-size: 12px; color: #999999;">© {datetime.now().year} CSA San Francisco. All rights reserved.</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+    """
+    
+    # Build plain text changes
+    changes_text = []
+    if 'title' in changes:
+        changes_text.append(f"Title: {changes['title']['old']} → {changes['title']['new']}")
+    if 'date_time' in changes:
+        changes_text.append(f"Date & Time: {changes['date_time']['old']} → {changes['date_time']['new']}")
+    if 'location' in changes:
+        changes_text.append(f"Location: {changes['location']['old']} → {changes['location']['new']}")
+    if 'description' in changes:
+        changes_text.append("Description: Updated")
+    if 'capacity' in changes:
+        changes_text.append(f"Capacity: {changes['capacity']['old']} → {changes['capacity']['new']}")
+    
+    changes_plain = "\n".join(changes_text) if changes_text else "Event details have been updated."
+    
+    plain_text = f"""
+Event Update 📢
+
+Dear {user_name or 'Valued Member'},
+
+We wanted to inform you that there have been some updates to the event you're registered for:
+
+EVENT DETAILS
+━━━━━━━━━━━━━━
+{event_title}
+
+📅 Date: {event_date}
+🕐 Time: {event_time}
+📍 Location: {event_location}
+
+WHAT CHANGED:
+━━━━━━━━━━━━━━
+{changes_plain}
+
+Please make note of these changes. We apologize for any inconvenience and look forward to seeing you at the event!
+
+View Event Details: {event_url or frontend_url + '/events'}
+
+Best regards,
+CSA San Francisco Chapter Team
+
+---
+Cloud Security Alliance - San Francisco Chapter
+This is an automated notification email. Please do not reply to this email.
+© {datetime.now().year} CSA San Francisco. All rights reserved.
+    """
+    
+    return html.strip(), plain_text.strip()

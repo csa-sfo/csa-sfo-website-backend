@@ -1,16 +1,8 @@
 # Standard library imports
 import asyncio
 import logging
-import threading
-import time
 from contextlib import asynccontextmanager
 from datetime import datetime
-
-# Third-party imports
-from apscheduler.jobstores.memory import MemoryJobStore
-from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
-from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.triggers.cron import CronTrigger
 from fastapi import APIRouter, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
@@ -20,7 +12,6 @@ import uvicorn
 
 # Local application imports
 from app.config_simple import settings
-from config.settings import SUPABASE_DB_URL
 from services.bot_service import (
     check_for_updates,
     check_index_stats,
@@ -32,10 +23,9 @@ from services.bot_service import (
 )
 from services.cache_service import init_redis_client
 from services.event_email_scheduler import (
-    reschedule_pending_reminders,
-    run_email_automation,
+    process_reminder_emails_for_tomorrow,
+    process_thank_you_emails_for_yesterday,
 )
-import services.event_email_scheduler as email_scheduler_module
 from services.sales_content_check import sales_content_changed
 
 # Configure logging
@@ -98,103 +88,39 @@ async def lifespan(app: FastAPI):
         # if await sales_content_changed():
         #     logger.info("Sales content changed, refreshing...")
         #     await initialize_sales_content()
-        # Periodic refresh (async)
+        # Periodic refresh and email automation (async)
         async def refresh_task():
             logger.info("Starting periodic refresh task...")
             while True:
-                logger.info("Sleeping for 24 hours before checking for updates...")
+                logger.info("Sleeping for 24 hours before checking for updates and sending emails...")
                 await asyncio.sleep(86400)  # Wait 24 hours before each check
-                logger.info("Checking for updates...")
+                logger.info("Checking for updates and processing emails...")
                 try:
+                    # Check for content updates
                     await check_for_updates()
                     logger.info("Update check completed successfully.")
+                    
+                    # Send reminder emails for events happening tomorrow
+                    try:
+                        reminders_sent = await process_reminder_emails_for_tomorrow()
+                        if reminders_sent > 0:
+                            logger.info(f"Sent {reminders_sent} reminder emails for events tomorrow")
+                    except Exception as e:
+                        logger.error(f"Error sending reminder emails: {e}")
+                    
+                    # Send thank-you emails for events that completed yesterday
+                    try:
+                        thank_yous_sent = await process_thank_you_emails_for_yesterday()
+                        if thank_yous_sent > 0:
+                            logger.info(f"Sent {thank_yous_sent} thank-you emails for events yesterday")
+                    except Exception as e:
+                        logger.error(f"Error sending thank-you emails: {e}")
+                        
                 except Exception as e:
                     logger.error(f"Error during periodic update check: {e}") 
 
         loop = asyncio.get_event_loop()
         loop.create_task(refresh_task())
-        
-        # Email automation scheduler
-        try:
-            # Try to use Supabase PostgreSQL job store for persistence, fallback to MemoryJobStore
-            try:
-                if not SUPABASE_DB_URL:
-                    raise ValueError("SUPABASE_DB_URL not configured")
-                
-                scheduler = BackgroundScheduler(
-                    jobstores={
-                        'default': SQLAlchemyJobStore(url=SUPABASE_DB_URL)
-                    }
-                )
-                persistence_type = "Supabase PostgreSQL (persistent)"
-                logger.info("Using Supabase PostgreSQL for APScheduler job store")
-            except (ImportError, ValueError, Exception) as e:
-                scheduler = BackgroundScheduler(
-                    jobstores={
-                        'default': MemoryJobStore()
-                    }
-                )
-                persistence_type = "Memory (non-persistent)"
-                error_msg = str(e)[:100] if str(e) else "Unknown error"
-                logger.warning(f"Supabase PostgreSQL job store unavailable ({error_msg}). Using MemoryJobStore. Jobs will be lost on server restart.")
-            
-            # Run email automation every 15 minutes (for pending confirmations and thank-you emails)
-            scheduler.add_job(
-                lambda: asyncio.run(run_email_automation()),
-                trigger=CronTrigger(minute='*/15'),  # Every 15 minutes
-                id='event_email_automation',
-                name='Event Email Automation',
-                replace_existing=True
-            )
-            
-            logger.info("Starting scheduler (may take a moment to connect to database)...")
-            
-            start_complete = threading.Event()
-            start_error_holder = [None]
-            
-            def start_in_thread():
-                try:
-                    scheduler.start()
-                    start_complete.set()
-                except Exception as e:
-                    start_error_holder[0] = e
-                    start_complete.set()
-            
-            start_thread = threading.Thread(target=start_in_thread, daemon=True)
-            start_thread.start()
-            
-            # Wait up to 5 seconds for scheduler to start
-            if start_complete.wait(timeout=5):
-                if start_error_holder[0]:
-                    logger.error(f"Error starting scheduler: {start_error_holder[0]}", exc_info=True)
-                    raise start_error_holder[0]
-                logger.info("Scheduler started successfully")
-            else:
-                logger.warning("Scheduler start is taking longer than expected, continuing anyway...")
-                # Check if it started in the background
-                time.sleep(1)
-                if scheduler.running:
-                    logger.info("Scheduler started (took longer than expected)")
-                else:
-                    logger.warning("Scheduler may not have started - jobs may not persist")
-            
-            app.state.scheduler = scheduler
-            
-            # Make scheduler accessible globally for registration endpoint
-            email_scheduler_module.scheduler = scheduler
-            
-            logger.info(f"Email automation scheduler started (runs every 15 minutes) with {persistence_type}")
-            
-            # Re-schedule any pending reminders that may have been lost (e.g., from MemoryJobStore)
-            if persistence_type == "Supabase PostgreSQL (persistent)":
-                try:
-                    rescheduled = await reschedule_pending_reminders()
-                    if rescheduled > 0:
-                        logger.info(f"Re-scheduled {rescheduled} reminder jobs for existing registrations")
-                except Exception as e:
-                    logger.error(f"Failed to reschedule pending reminders on startup: {e}", exc_info=True)
-        except Exception as e:
-            logger.warning(f"Failed to start email automation scheduler: {e}. Continuing without email automation.")
         
         yield
     except Exception as e:
@@ -202,8 +128,6 @@ async def lifespan(app: FastAPI):
         raise  # Re-raise if you want the app to fail on startup errors
     finally:
         # Cleanup resources in finally block to ensure they run even on errors
-        if hasattr(app.state, 'scheduler'):
-            app.state.scheduler.shutdown()
         if hasattr(app.state, 'redis'):
             app.state.redis.close()
 
