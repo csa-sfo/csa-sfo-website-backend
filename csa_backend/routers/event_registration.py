@@ -4,7 +4,11 @@ from pydantic import BaseModel
 from supabase import create_client, Client
 import os
 from typing import Optional
+from datetime import datetime, timedelta
+import pytz
 from services.auth_services import verify_admin_token
+from services.event_email_service import send_event_email
+from services.event_email_scheduler import send_confirmation_and_reminder_together, format_datetime
 
 # Initialize router
 event_registration_router = APIRouter()
@@ -40,27 +44,39 @@ async def create_event_registration(registration: EventRegistrationRequest):
     try:
         supabase = get_supabase_client()
         
-        # Validate user exists in either users or admins table
-        user_response = supabase.table("users").select("id, email").eq("id", registration.user_id).limit(1).execute()
-        admin_response = supabase.table("admins").select("id, email").eq("id", registration.user_id).limit(1).execute()
+        # Validate user exists in either users or admins table and get full details
+        user_response = supabase.table("users").select("id, email, name").eq("id", registration.user_id).limit(1).execute()
+        admin_response = supabase.table("admins").select("id, email, name").eq("id", registration.user_id).limit(1).execute()
         
         if not user_response.data and not admin_response.data:
             raise HTTPException(status_code=404, detail="User not found")
         
-        # Validate event exists
-        event_response = supabase.table("events").select("id, title, capacity, attendees").eq("id", registration.event_id).limit(1).execute()
+        # Get user data
+        user_data = user_response.data[0] if user_response.data else admin_response.data[0]
+        user_email = user_data.get("email")
+        user_name = user_data.get("name", "Valued Member")
+        
+        # Validate event exists and get full details
+        event_response = supabase.table("events").select("id, title, capacity, attendees, date_time, location, slug").eq("id", registration.event_id).limit(1).execute()
         if not event_response.data:
             raise HTTPException(status_code=404, detail="Event not found")
         
         event_data = event_response.data[0]
         
-        # Check if user is already registered
-        existing_registration = supabase.table("event_registrations").select("id").eq(
+        # Check if user is already registered - return existing registration instead of error
+        existing_registration = supabase.table("event_registrations").select("id, email_status").eq(
             "user_id", registration.user_id
         ).eq("event_id", registration.event_id).limit(1).execute()
         
         if existing_registration.data:
-            raise HTTPException(status_code=400, detail="User already registered for this event")
+            existing_reg = existing_registration.data[0]
+            logging.info(f"User already registered (create_event_registration), returning existing {existing_reg['id']}")
+            return EventRegistrationResponse(
+                id=existing_reg["id"],
+                user_id=registration.user_id,
+                event_id=registration.event_id,
+                message="Already registered for this event"
+            )
         
         # Check if event is at capacity
         if event_data["attendees"] >= event_data["capacity"]:
@@ -82,6 +98,83 @@ async def create_event_registration(registration: EventRegistrationRequest):
         }).eq("id", registration.event_id).execute()
         
         registration_id = registration_response.data[0]["id"]
+        
+        # Send confirmation email immediately (fire and forget - don't block registration)
+        try:
+            # Format event date and time
+            timezone = pytz.timezone("America/Los_Angeles")
+            event_start = datetime.fromisoformat(event_data["date_time"].replace('Z', '+00:00'))
+            if event_start.tzinfo is None:
+                event_start = pytz.UTC.localize(event_start)
+            event_start_local = event_start.astimezone(timezone)
+            
+            event_date, event_time = format_datetime(event_data["date_time"])
+            
+            # Calculate hours until event
+            now = datetime.now(timezone)
+            hours_until_event = (event_start_local - now).total_seconds() / 3600
+            
+            # Check if event is within 24 hours or happening tomorrow
+            tomorrow = now + timedelta(days=1)
+            is_within_24h = hours_until_event < 24 and hours_until_event > 0
+            is_tomorrow = event_start_local.date() == tomorrow.date() and event_start_local > now
+            
+            # If within 24 hours or happening tomorrow, send both confirmation and reminder
+            if is_within_24h or is_tomorrow:
+                logging.info(f"Event within 24h or tomorrow for registration {registration_id}, sending both confirmation and reminder")
+                email_result = await send_confirmation_and_reminder_together(
+                    registration_id=registration_id,
+                    user_email=user_email,
+                    user_name=user_name,
+                    event_title=event_data["title"],
+                    event_date=event_date,
+                    event_time=event_time,
+                    event_location=event_data.get("location", "TBA"),
+                    event_slug=event_data.get("slug")
+                )
+                
+                if email_result["success"]:
+                    logging.info(f"Confirmation and reminder emails sent together for registration {registration_id}")
+                else:
+                    # Update with error
+                    supabase.table("event_registrations").update({
+                        "email_status": "failed",
+                        "email_error": email_result.get("error", "Unknown error")
+                    }).eq("id", registration_id).execute()
+                    logging.error(f"Failed to send emails for {registration_id}: {email_result.get('error')}")
+            else:
+                # Send only confirmation email (reminder will be sent by daily job)
+                email_result = await send_event_email(
+                    email_type="confirmation",
+                    to_email=user_email,
+                    user_name=user_name,
+                    event_title=event_data["title"],
+                    event_date=event_date,
+                    event_time=event_time,
+                    event_location=event_data.get("location", "TBA"),
+                    event_slug=event_data.get("slug")
+                )
+                
+                if email_result["success"]:
+                    # Confirmation sent - reminder and thank-you emails will be handled by daily check
+                    supabase.table("event_registrations").update({
+                        "email_status": "confirmation_sent",
+                        "confirmation_sent_at": datetime.utcnow().isoformat()
+                    }).eq("id", registration_id).execute()
+                    logging.info(f"Confirmation email sent for registration {registration_id}")
+                else:
+                    # Email failed but registration succeeded
+                    supabase.table("event_registrations").update({
+                        "email_status": "failed",
+                        "email_error": email_result.get("error", "Unknown error")
+                    }).eq("id", registration_id).execute()
+                    logging.error(f"Failed to send confirmation email for {registration_id}: {email_result.get('error')}")
+        except Exception as email_error:
+            # Log error but don't fail registration
+            logging.error(f"Error sending confirmation email for {registration_id}: {email_error}")
+            supabase.table("event_registrations").update({
+                "email_error": str(email_error)
+            }).eq("id", registration_id).execute()
         
         logging.info(f"Registration created: {registration_id}")
         return EventRegistrationResponse(
@@ -182,20 +275,38 @@ async def simple_event_registration(registration: EventRegistrationRequest):
     try:
         supabase = get_supabase_client()
         
-        # Get event details first
-        event_response = supabase.table("events").select("id, attendees, capacity").eq("id", registration.event_id).limit(1).execute()
+        # Get user data
+        user_response = supabase.table("users").select("id, email, name").eq("id", registration.user_id).limit(1).execute()
+        admin_response = supabase.table("admins").select("id, email, name").eq("id", registration.user_id).limit(1).execute()
+        
+        user_data = user_response.data[0] if user_response.data else (admin_response.data[0] if admin_response.data else None)
+        if not user_data:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        user_email = user_data.get("email")
+        user_name = user_data.get("name", "Valued Member")
+        
+        # Get event details with full info
+        event_response = supabase.table("events").select("id, title, attendees, capacity, date_time, location, slug").eq("id", registration.event_id).limit(1).execute()
         if not event_response.data:
             raise HTTPException(status_code=404, detail="Event not found")
         
         event_data = event_response.data[0]
         
-        # Check if user is already registered
-        existing_registration = supabase.table("event_registrations").select("id").eq(
+        # Check if user is already registered - return existing instead of error
+        existing_registration = supabase.table("event_registrations").select("id, email_status").eq(
             "user_id", registration.user_id
         ).eq("event_id", registration.event_id).limit(1).execute()
         
         if existing_registration.data:
-            raise HTTPException(status_code=400, detail="User already registered for this event")
+            existing_reg = existing_registration.data[0]
+            logging.info(f"User already registered (simple_registration), returning existing {existing_reg['id']}")
+            return EventRegistrationResponse(
+                id=existing_reg["id"],
+                user_id=registration.user_id,
+                event_id=registration.event_id,
+                message="Already registered for this event"
+            )
         
         # Check if event is at capacity
         if event_data["attendees"] >= event_data["capacity"]:
@@ -217,6 +328,76 @@ async def simple_event_registration(registration: EventRegistrationRequest):
         }).eq("id", registration.event_id).execute()
         
         registration_id = registration_response.data[0]["id"]
+        
+        # Send confirmation email immediately
+        try:
+            timezone = pytz.timezone("America/Los_Angeles")
+            event_start = datetime.fromisoformat(event_data["date_time"].replace('Z', '+00:00'))
+            if event_start.tzinfo is None:
+                event_start = pytz.UTC.localize(event_start)
+            event_start_local = event_start.astimezone(timezone)
+            
+            event_date, event_time = format_datetime(event_data["date_time"])
+            
+            now = datetime.now(timezone)
+            hours_until_event = (event_start_local - now).total_seconds() / 3600
+            
+            # Check if event is within 24 hours or happening tomorrow
+            tomorrow = now + timedelta(days=1)
+            is_within_24h = hours_until_event < 24 and hours_until_event > 0
+            is_tomorrow = event_start_local.date() == tomorrow.date() and event_start_local > now
+            
+            # If within 24 hours or happening tomorrow, send both confirmation and reminder
+            if is_within_24h or is_tomorrow:
+                logging.info(f"Event within 24h or tomorrow for registration {registration_id}, sending both confirmation and reminder")
+                email_result = await send_confirmation_and_reminder_together(
+                    registration_id=registration_id,
+                    user_email=user_email,
+                    user_name=user_name,
+                    event_title=event_data["title"],
+                    event_date=event_date,
+                    event_time=event_time,
+                    event_location=event_data.get("location", "TBA"),
+                    event_slug=event_data.get("slug")
+                )
+                
+                if email_result["success"]:
+                    logging.info(f"Confirmation and reminder emails sent together for registration {registration_id}")
+                else:
+                    supabase.table("event_registrations").update({
+                        "email_status": "failed",
+                        "email_error": email_result.get("error", "Unknown error")
+                    }).eq("id", registration_id).execute()
+            else:
+                # Send only confirmation email (reminder will be sent by daily job)
+                email_result = await send_event_email(
+                    email_type="confirmation",
+                    to_email=user_email,
+                    user_name=user_name,
+                    event_title=event_data["title"],
+                    event_date=event_date,
+                    event_time=event_time,
+                    event_location=event_data.get("location", "TBA"),
+                    event_slug=event_data.get("slug")
+                )
+                
+                if email_result["success"]:
+                    # Confirmation sent - reminder and thank-you emails will be handled by daily check
+                    supabase.table("event_registrations").update({
+                        "email_status": "confirmation_sent",
+                        "confirmation_sent_at": datetime.utcnow().isoformat()
+                    }).eq("id", registration_id).execute()
+                    logging.info(f"Confirmation email sent for registration {registration_id}")
+                else:
+                    supabase.table("event_registrations").update({
+                        "email_status": "failed",
+                        "email_error": email_result.get("error", "Unknown error")
+                    }).eq("id", registration_id).execute()
+        except Exception as email_error:
+            logging.error(f"Error sending email for {registration_id}: {email_error}")
+            supabase.table("event_registrations").update({
+                "email_error": str(email_error)
+            }).eq("id", registration_id).execute()
         
         logging.info(f"Test registration created: {registration_id}")
         return {
@@ -382,6 +563,96 @@ async def delete_event_registration(event_id: str, user_id: str, token_data: dic
     except Exception as e:
         logging.error(f"Error deleting event registration: {e}")
         raise HTTPException(status_code=500, detail=f"Error deleting registration: {str(e)}")
+
+@event_registration_router.post("/resend-email/{registration_id}")
+async def resend_registration_email(registration_id: str):
+    """
+    Resend confirmation email for an existing registration.
+    Useful if email wasn't sent initially.
+    """
+    try:
+        supabase = get_supabase_client()
+        
+        # Get registration with user and event details
+        reg_response = supabase.table("event_registrations").select(
+            """
+            id,
+            user_id,
+            event_id,
+            email_status,
+            events!inner(id, title, date_time, location, slug)
+            """
+        ).eq("id", registration_id).limit(1).execute()
+        
+        if not reg_response.data:
+            raise HTTPException(status_code=404, detail="Registration not found")
+        
+        reg = reg_response.data[0]
+        
+        # Get user data
+        user_response = supabase.table("users").select("id, email, name").eq("id", reg["user_id"]).limit(1).execute()
+        admin_response = supabase.table("admins").select("id, email, name").eq("id", reg["user_id"]).limit(1).execute()
+        
+        user_data = user_response.data[0] if user_response.data else (admin_response.data[0] if admin_response.data else None)
+        if not user_data or not user_data.get("email"):
+            raise HTTPException(status_code=404, detail="User email not found")
+        
+        event_data = reg.get("events")
+        if not event_data:
+            raise HTTPException(status_code=404, detail="Event not found")
+        
+        # Format event date and time
+        timezone = pytz.timezone("America/Los_Angeles")
+        event_start = datetime.fromisoformat(event_data["date_time"].replace('Z', '+00:00'))
+        if event_start.tzinfo is None:
+            event_start = pytz.UTC.localize(event_start)
+        event_start_local = event_start.astimezone(timezone)
+        
+        event_date = event_start_local.strftime("%B %d, %Y")
+        event_time = event_start_local.strftime("%I:%M %p %Z")
+        
+        # Send confirmation email
+        email_result = await send_event_email(
+            email_type="confirmation",
+            to_email=user_data["email"],
+            user_name=user_data.get("name", "Valued Member"),
+            event_title=event_data["title"],
+            event_date=event_date,
+            event_time=event_time,
+            event_location=event_data.get("location", "TBA"),
+            event_slug=event_data.get("slug")
+        )
+        
+        if email_result["success"]:
+            # Update registration status
+            supabase.table("event_registrations").update({
+                "email_status": "confirmation_sent",
+                "confirmation_sent_at": datetime.utcnow().isoformat(),
+                "email_error": None
+            }).eq("id", registration_id).execute()
+            
+            return {
+                "success": True,
+                "message": "Confirmation email sent successfully",
+                "message_id": email_result["message_id"]
+            }
+        else:
+            # Update with error
+            supabase.table("event_registrations").update({
+                "email_status": "failed",
+                "email_error": email_result.get("error", "Unknown error")
+            }).eq("id", registration_id).execute()
+            
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to send email: {email_result.get('error')}"
+            )
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error resending email: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to resend email: {str(e)}")
 
 @event_registration_router.get("/debug/event-registrations")
 async def debug_event_registrations():

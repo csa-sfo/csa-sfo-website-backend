@@ -71,6 +71,14 @@ class Settings:
         # Stripe Configuration
         self.stripe_secret_key = os.getenv("CSA_STRIPE_SECRET_KEY")
         self.stripe_webhook_secret = os.getenv("CSA_STRIPE_WEBHOOK_SECRET")
+        
+        # AWS SES Configuration
+        self.aws_access_key_id = os.getenv("CSA_AWS_ACCESS_KEY_ID")
+        self.aws_secret_access_key = os.getenv("CSA_AWS_SECRET_ACCESS_KEY")
+        self.aws_region = os.getenv("CSA_AWS_REGION", "us-east-1")
+        self.aws_ses_from_email = os.getenv("CSA_AWS_SES_FROM_EMAIL", self.from_email)
+        self.aws_ses_from_name = os.getenv("CSA_AWS_SES_FROM_NAME", self.from_name)
+        self.frontend_url = os.getenv("CSA_FRONTEND_URL", "https://csasfo.com")
     
     @property
     def redis_url(self) -> str:

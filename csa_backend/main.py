@@ -1,14 +1,32 @@
-from fastapi import FastAPI, Request
+# Standard library imports
+import asyncio
+import logging
+from contextlib import asynccontextmanager
+from datetime import datetime
+from fastapi import APIRouter, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse
-import asyncio
-import time
-import logging
-from datetime import datetime
-from app.config_simple import settings
-from contextlib import asynccontextmanager
+from redis.asyncio import Redis
+import uvicorn
 
+# Local application imports
+from app.config_simple import settings
+from services.bot_service import (
+    check_for_updates,
+    check_index_stats,
+    get_urls,
+    initialize_events_content,
+    initialize_sales_content,
+    initialize_website_content,
+    load_hashes,
+)
+from services.cache_service import init_redis_client
+from services.event_email_scheduler import (
+    process_reminder_emails_for_tomorrow,
+    process_thank_you_emails_for_yesterday,
+)
+from services.sales_content_check import sales_content_changed
 
 # Configure logging
 logging.basicConfig(
@@ -22,22 +40,13 @@ try:
     from routes_register import router as api_router
     from routers.payments import payment_router
     from routers.router import message_router
-    from services.bot_service import initialize_website_content, initialize_events_content, initialize_sales_content, load_hashes, check_for_updates, get_urls, check_index_stats
 except ImportError as e:
     logger.error(f"Failed to import required modules: {e}")
     # Create empty routers if imports fail
-    from fastapi import APIRouter
     api_router = APIRouter()
     payment_router = APIRouter()
     message_router = APIRouter()
     logger.warning("Using empty routers due to import failure")
-
-from apscheduler.schedulers.background import BackgroundScheduler   
-from services.sales_content_check import sales_content_changed
-import uvicorn
-
-from redis.asyncio import Redis
-from services.cache_service import init_redis_client
 
 # Define lifespan manager first
 @asynccontextmanager
@@ -57,7 +66,6 @@ async def lifespan(app: FastAPI):
 
         global hashes
         try:
-            from services.bot_service import initialize_website_content, initialize_sales_content, load_hashes, check_for_updates, get_urls, check_index_stats
             hashes = load_hashes()
             stats = check_index_stats()
             website_count = stats["namespaces"].get("website", {}).get("vector_count", 0)
@@ -80,32 +88,48 @@ async def lifespan(app: FastAPI):
         # if await sales_content_changed():
         #     logger.info("Sales content changed, refreshing...")
         #     await initialize_sales_content()
-        # Periodic refresh (async)
+        # Periodic refresh and email automation (async)
         async def refresh_task():
             logger.info("Starting periodic refresh task...")
             while True:
-                logger.info("Sleeping for 24 hours before checking for updates...")
+                logger.info("Sleeping for 24 hours before checking for updates and sending emails...")
                 await asyncio.sleep(86400)  # Wait 24 hours before each check
-                logger.info("Checking for updates...")
+                logger.info("Checking for updates and processing emails...")
                 try:
+                    # Check for content updates
                     await check_for_updates()
                     logger.info("Update check completed successfully.")
+                    
+                    # Send reminder emails for events happening tomorrow
+                    try:
+                        reminders_sent = await process_reminder_emails_for_tomorrow()
+                        if reminders_sent > 0:
+                            logger.info(f"Sent {reminders_sent} reminder emails for events tomorrow")
+                    except Exception as e:
+                        logger.error(f"Error sending reminder emails: {e}")
+                    
+                    # Send thank-you emails for events that completed yesterday
+                    try:
+                        thank_yous_sent = await process_thank_you_emails_for_yesterday()
+                        if thank_yous_sent > 0:
+                            logger.info(f"Sent {thank_yous_sent} thank-you emails for events yesterday")
+                    except Exception as e:
+                        logger.error(f"Error sending thank-you emails: {e}")
+                        
                 except Exception as e:
                     logger.error(f"Error during periodic update check: {e}") 
 
         loop = asyncio.get_event_loop()
         loop.create_task(refresh_task())
+        
         yield
     except Exception as e:
         logger.error(f"Error during lifespan startup: {e}")
         raise  # Re-raise if you want the app to fail on startup errors
     finally:
         # Cleanup resources in finally block to ensure they run even on errors
-        if hasattr(app.state, 'scheduler'):
-            app.state.scheduler.shutdown()
         if hasattr(app.state, 'redis'):
-            app.state.redis.close()     
-        pass
+            app.state.redis.close()
 
 # Create the FastAPI app once
 app = FastAPI(
@@ -237,9 +261,8 @@ async def debug_routes():
                 "name": getattr(route, 'name', 'Unknown')
             })
     return {"routes": routes, "total_routes": len(routes)}
-    
+
 if __name__ == "__main__":
-    import uvicorn
     uvicorn.run(
         "main:app",
         host=settings.host,

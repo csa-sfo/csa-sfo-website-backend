@@ -1,4 +1,5 @@
 import logging
+import asyncio
 from fastapi import APIRouter, Depends, HTTPException, status,Path
 from models.event_models import Event
 from models.event_models import AgendaItem
@@ -145,14 +146,91 @@ def update_event(event_id: str,event: Event,token_data: dict = Depends(verify_to
         raise HTTPException(status_code=404, detail="Event not found or unauthorized")
 
     try:
+        old_event_data = event_resp.data[0]
+        old_date_time = old_event_data.get("date_time")
+        
         update_data = {
             k: (v.isoformat() if isinstance(v, datetime) else v)
             for k, v in event.dict(exclude_unset=True).items()
             if k not in ["speakers", "agenda"]
         }
+        
+        # Detect changes for email notification
+        changes = {}
+        from services.event_email_scheduler import format_datetime
+        
+        # Check each field for changes
+        if 'title' in update_data and update_data['title'] != old_event_data.get('title'):
+            changes['title'] = {
+                'old': old_event_data.get('title', 'N/A'),
+                'new': update_data['title']
+            }
+        
+        if 'date_time' in update_data and update_data['date_time'] != old_date_time:
+            # Format old and new date_time for display
+            old_date, old_time = format_datetime(old_date_time) if old_date_time else ("N/A", "N/A")
+            new_date, new_time = format_datetime(update_data['date_time'])
+            changes['date_time'] = {
+                'old': f"{old_date} at {old_time}",
+                'new': f"{new_date} at {new_time}"
+            }
+        
+        if 'location' in update_data and update_data['location'] != old_event_data.get('location'):
+            changes['location'] = {
+                'old': old_event_data.get('location', 'TBA'),
+                'new': update_data['location']
+            }
+        
+        if 'description' in update_data and update_data['description'] != old_event_data.get('description'):
+            changes['description'] = {
+                'old': 'Previous description',
+                'new': 'Updated description'
+            }
+        
+        if 'capacity' in update_data and update_data['capacity'] != old_event_data.get('capacity'):
+            changes['capacity'] = {
+                'old': str(old_event_data.get('capacity', 'N/A')),
+                'new': str(update_data['capacity'])
+            }
 
         # Update main event data
         supabase.table("events").update(update_data).eq("id", str(event_id)).execute()
+        
+        # Get updated event data for email
+        updated_event_resp = supabase.table("events").select("*").eq("id", str(event_id)).limit(1).execute()
+        updated_event_data = updated_event_resp.data[0] if updated_event_resp.data else old_event_data
+        
+        # Send update emails if there are changes AND event is upcoming (not past)
+        # Only admins can trigger this via the update endpoint
+        if changes:
+            try:
+                from services.event_email_scheduler import send_event_update_emails, format_datetime
+                
+                # Check if event is upcoming (date_time is in the future)
+                event_date_time = updated_event_data.get("date_time")
+                if event_date_time:
+                    # Parse event date_time
+                    event_start = datetime.fromisoformat(event_date_time.replace('Z', '+00:00'))
+                    if event_start.tzinfo is None:
+                        event_start = pytz.UTC.localize(event_start)
+                    
+                    timezone = pytz.timezone("America/Los_Angeles")
+                    now = datetime.now(timezone)
+                    event_start_local = event_start.astimezone(timezone)
+                    
+                    # Only send update emails for upcoming events
+                    if event_start_local > now:
+                        emails_sent = asyncio.run(send_event_update_emails(str(event_id), changes, updated_event_data))
+                        logging.info(f"Sent {emails_sent} update emails for upcoming event {event_id}")
+                    else:
+                        logging.info(f"Event {event_id} is in the past, skipping update emails")
+                else:
+                    # If no date_time, treat as upcoming and send emails
+                    emails_sent = asyncio.run(send_event_update_emails(str(event_id), changes, updated_event_data))
+                    logging.info(f"Sent {emails_sent} update emails for event {event_id} (no date_time)")
+            except Exception as email_error:
+                logging.warning(f"Failed to send update emails for event {event_id}: {email_error}")
+                # Don't fail event update if email sending fails
 
         # Only update speakers and agenda if they are provided
         if hasattr(event, 'speakers') and event.speakers is not None:
