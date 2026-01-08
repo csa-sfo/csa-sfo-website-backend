@@ -58,7 +58,6 @@ class GoogleDriveService:
         """Get OAuth client configuration from environment variables or JSON file"""
         # Try environment variables first
         if self.client_id and self.client_secret:
-            logger.info("Using Google Drive credentials from environment variables")
             # For manual OAuth flow, use urn:ietf:wg:oauth:2.0:oob (out-of-band)
             # This allows copy-paste of authorization code
             redirect_uri = os.getenv('GOOGLE_DRIVE_REDIRECT_URI', 'http://localhost')
@@ -75,7 +74,6 @@ class GoogleDriveService:
         
         # Fallback to JSON file
         if self.credentials_file and os.path.exists(self.credentials_file):
-            logger.info(f"Using Google Drive credentials from file: {self.credentials_file}")
             try:
                 with open(self.credentials_file, 'r') as f:
                     return json.load(f)
@@ -88,29 +86,24 @@ class GoogleDriveService:
     def _authenticate(self):
         """Authenticate with Google Drive API"""
         creds = None
-        # Allow token file path to be configured via environment variable (for production)
-        token_file = os.getenv('GOOGLE_DRIVE_TOKEN_FILE', 'token.pickle')
+        import base64
         
-        # Load existing token if available
-        if os.path.exists(token_file):
+        # Load token from environment variable (base64 encoded)
+        token_base64 = os.getenv('GOOGLE_DRIVE_TOKEN_BASE64')
+        if token_base64:
             try:
-                with open(token_file, 'rb') as token:
-                    creds = pickle.load(token)
+                token_bytes = base64.b64decode(token_base64)
+                creds = pickle.loads(token_bytes)
+                logger.info("Loaded Google Drive token from environment variable")
             except Exception as e:
-                logger.warning(f"Could not load existing token: {e}")
+                logger.warning(f"Could not load token from environment variable: {e}")
+                creds = None
         
         # If there are no (valid) credentials available, let the user log in
         if not creds or not creds.valid:
             if creds and creds.expired and creds.refresh_token:
                 try:
                     creds.refresh(Request())
-                    # Save refreshed token
-                    try:
-                        with open(token_file, 'wb') as token:
-                            pickle.dump(creds, token)
-                        logger.info("Token refreshed successfully")
-                    except Exception as e:
-                        logger.warning(f"Could not save refreshed token: {e}")
                 except Exception as e:
                     logger.error(f"Error refreshing credentials: {e}")
                     creds = None
@@ -118,10 +111,7 @@ class GoogleDriveService:
             if not creds:
                 client_config = self._get_client_config()
                 if not client_config:
-                    logger.error("Google Drive credentials not found")
-                    logger.info("Please set either:")
-                    logger.info("  - CSA_GOOGLE_DRIVE_CLIENT_ID and CSA_GOOGLE_DRIVE_CLIENT_SECRET")
-                    logger.info("  - OR CSA_GOOGLE_DRIVE_CREDENTIALS_FILE (path to JSON file)")
+                    logger.error("Google Drive credentials not found. Set CSA_GOOGLE_DRIVE_CLIENT_ID and CSA_GOOGLE_DRIVE_CLIENT_SECRET")
                     return
                 
                 # Check if we're in a production environment (no display/server environment)
@@ -162,7 +152,6 @@ class GoogleDriveService:
                             code=auth_code,
                             redirect_uri='urn:ietf:wg:oauth:2.0:oob'
                         )
-                        logger.info("Authentication successful using provided auth code")
                         # Clear the env var after use (optional, for security)
                         # os.environ.pop('GOOGLE_DRIVE_AUTH_CODE', None)
                     else:
@@ -172,14 +161,8 @@ class GoogleDriveService:
                     logger.error(f"Error during authentication: {e}")
                     return
             
-            # Save the credentials for the next run
             if creds:
-                try:
-                    with open(token_file, 'wb') as token:
-                        pickle.dump(creds, token)
-                    logger.info(f"Credentials saved to {token_file}")
-                except Exception as e:
-                    logger.warning(f"Could not save token: {e}")
+                logger.info("New credentials obtained. Update GOOGLE_DRIVE_TOKEN_BASE64 with the new token")
         
         if creds:
             try:
@@ -361,7 +344,6 @@ class GoogleDriveService:
             if result.get('id'):
                 return True
             else:
-                logger.warning(f"⚠ Permission created but no ID returned for file '{file_name}' ({file_id})")
                 return False
             
         except HttpError as error:
@@ -372,14 +354,10 @@ class GoogleDriveService:
             
             # Check for permission denied errors
             if '403' in error_str or 'permission' in error_str.lower() or 'forbidden' in error_str.lower():
-                logger.error(f"✗ Permission denied: Cannot make file {file_id} public. Error: {error}")
-                logger.error(f"  This usually means:")
-                logger.error(f"  1. The OAuth token doesn't have 'drive' scope (needs full drive access, not just readonly)")
-                logger.error(f"  2. The file is owned by someone else and you don't have permission to change sharing")
-                logger.error(f"  3. The file is in a restricted folder")
+                logger.error(f"Permission denied: Cannot make file {file_id} public: {error}")
                 return False
             
-            logger.warning(f"⚠ Error making file public: {error}")
+            logger.warning(f"Error making file public: {error}")
             return False
         except Exception as e:
             logger.error(f"✗ Unexpected error making file public: {e}", exc_info=True)
@@ -466,29 +444,15 @@ class GoogleDriveService:
         # Get public URLs for images (make them public if needed)
         image_urls = []
         for image in images:
-            
             # Make file public (with retry if needed)
             public_success = self.make_file_public(image['id'])
-            if not public_success:
-                logger.warning(f"⚠ Failed to make file public: {image['name']} (ID: {image['id']})")
-                # Still try to get URL - might work if already public
             
             # Get public URL (try even if make_file_public failed - file might already be public)
             public_url = self.get_public_url(image['id'])
             if public_url:
                 image_urls.append((image['name'], public_url, image['id']))
             else:
-                logger.error(f"✗ Failed to get public URL for: {image['name']} (ID: {image['id']})")
-                # Log the file ID for debugging
-                logger.error(f"  File ID: {image['id']} - Check if file exists and is accessible")
-            
-            # If make_file_public failed, log instructions for manual sharing
-            if not public_success and public_url:
-                logger.warning(f"⚠ File '{image['name']}' may not be publicly accessible")
-                logger.warning(f"  If images show 403 errors, manually share the file in Google Drive:")
-                logger.warning(f"  1. Go to: https://drive.google.com/file/d/{image['id']}/view")
-                logger.warning(f"  2. Click 'Share' → 'Change to anyone with the link' → 'Viewer'")
-                logger.warning(f"  3. Then re-sync the folder")
+                logger.error(f"Failed to get public URL for: {image['name']} (ID: {image['id']})")
         
         return image_urls
 
