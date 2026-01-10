@@ -5,8 +5,8 @@ on:
     branches: [ main, dev ]
     paths:
       - 'csa_backend/**'
-      - 'Dockerfile'
-      - 'requirements.txt'
+      - 'csa_backend/Dockerfile'
+      - 'csa_backend/requirements.txt'
       - '.github/workflows/deploy-gcp-cloudrun.yml'
 
 env:
@@ -52,7 +52,7 @@ jobs:
           set -euo pipefail
           IMAGE_TAG="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO_NAME}/${SERVICE_NAME}:${GITHUB_SHA}"
           echo "IMAGE_TAG=$IMAGE_TAG" >> "$GITHUB_ENV"
-          docker build -t "$IMAGE_TAG" .
+          docker build -t "$IMAGE_TAG" ./csa_backend
 
       - name: Push Docker Image
         run: docker push "$IMAGE_TAG"
@@ -89,5 +89,5 @@ jobs:
             CSA_TO_EMAIL_1=CSA_TO_EMAIL_1:latest
             CSA_VAPI_KEY=CSA_VAPI_KEY:latest
           flags: >
-            --service-account=csasfo-runtime-sa@csa-sfo-483700.iam.gserviceaccount.com
+            --service-account=csasfo-runtime-sa@${{ env.PROJECT_ID }}.iam.gserviceaccount.com
             --allow-unauthenticated
