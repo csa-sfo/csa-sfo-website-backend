@@ -1,0 +1,93 @@
+name: Deploy to Cloud Run
+
+on:
+  push:
+    branches: [ main, dev ]
+    paths:
+      - 'csa_backend/**'
+      - 'Dockerfile'
+      - 'requirements.txt'
+      - '.github/workflows/deploy-gcp-cloudrun.yml'
+
+env:
+  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+  REGION: us-west2
+  REPO_NAME: csasfo-backend
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Google Auth (WIF)
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_DEPLOYER_SA }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker "${{ env.REGION }}-docker.pkg.dev" --quiet
+
+      - name: Set deployment vars
+        run: |
+          BRANCH="${GITHUB_REF_NAME}"
+          if [ "$BRANCH" = "main" ]; then
+            DEPLOY_ENV="prod"
+          elif [ "$BRANCH" = "dev" ]; then
+            DEPLOY_ENV="dev"
+          fi
+          SERVICE_NAME="csasfo-backend-${DEPLOY_ENV}"
+          echo "DEPLOY_ENV=$DEPLOY_ENV" >> "$GITHUB_ENV"
+          echo "SERVICE_NAME=$SERVICE_NAME" >> "$GITHUB_ENV"
+
+      - name: Build Docker Image
+        run: |
+          set -euo pipefail
+          IMAGE_TAG="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO_NAME}/${SERVICE_NAME}:${GITHUB_SHA}"
+          echo "IMAGE_TAG=$IMAGE_TAG" >> "$GITHUB_ENV"
+          docker build -t "$IMAGE_TAG" .
+
+      - name: Push Docker Image
+        run: docker push "$IMAGE_TAG"
+
+      - name: Deploy to Cloud Run
+        uses: google-github-actions/deploy-cloudrun@v3
+        with:
+          service: ${{ env.SERVICE_NAME }}
+          region: ${{ env.REGION }}
+          image: ${{ env.IMAGE_TAG }}
+          env_vars: |
+            ENV=${{ env.DEPLOY_ENV }}
+          secrets: |
+            CSA_ASSISTANT_ID=CSA_ASSISTANT_ID:latest
+            CSA_FROM_EMAIL=CSA_FROM_EMAIL:latest
+            CSA_FROM_NAME=CSA_FROM_NAME:latest
+            CSA_GOOGLE_DRIVE_CLIENT_ID=CSA_GOOGLE_DRIVE_CLIENT_ID:latest
+            CSA_GOOGLE_DRIVE_CLIENT_SECRET=CSA_GOOGLE_DRIVE_CLIENT_SECRET:latest
+            CSA_GOOGLE_DRIVE_FOLDER_ID=CSA_GOOGLE_DRIVE_FOLDER_ID:latest
+            CSA_GOOGLE_DRIVE_WEBHOOK_URL=CSA_GOOGLE_DRIVE_WEBHOOK_URL:latest
+            CSA_JWT_SECRET_KEY=CSA_JWT_SECRET_KEY:latest
+            CSA_MAILERSEND_API_KEY=CSA_MAILERSEND_API_KEY:latest
+            CSA_OPENAI=CSA_OPENAI:latest
+            CSA_OPENAI_MODEL=CSA_OPENAI_MODEL:latest
+            CSA_PHONE_NUMBER_ID=CSA_PHONE_NUMBER_ID:latest
+            CSA_STRIPE_SECRET_KEY=CSA_STRIPE_SECRET_KEY:latest
+            CSA_STRIPE_WEBHOOK_SECRET=CSA_STRIPE_WEBHOOK_SECRET:latest
+            CSA_SUPABASE_GOOGLE_PROVIDER=CSA_SUPABASE_GOOGLE_PROVIDER:latest
+            CSA_SUPABASE_REDIRECT_URL=CSA_SUPABASE_REDIRECT_URL:latest
+            CSA_SUPABASE_SERVICE_KEY=CSA_SUPABASE_SERVICE_KEY:latest
+            CSA_SUPABASE_URL=CSA_SUPABASE_URL:latest
+            CSA_TEAMS_WEBHOOK_URL=CSA_TEAMS_WEBHOOK_URL:latest
+            CSA_TEAMS_WEBHOOK_URL_VAPI=CSA_TEAMS_WEBHOOK_URL_VAPI:latest
+            CSA_TO_EMAIL_1=CSA_TO_EMAIL_1:latest
+            CSA_VAPI_KEY=CSA_VAPI_KEY:latest
+          flags: >
+            --service-account=csasfo-runtime-sa@csa-sfo-483700.iam.gserviceaccount.com
+            --allow-unauthenticated
