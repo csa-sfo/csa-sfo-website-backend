@@ -67,6 +67,7 @@ jobs:
             ENV=${{ env.DEPLOY_ENV }}
           secrets: |
             CSA_ASSISTANT_ID=CSA_ASSISTANT_ID:latest
+            CSA_PINECONE=CSA_PINECONE:latest
             CSA_FROM_EMAIL=CSA_FROM_EMAIL:latest
             CSA_FROM_NAME=CSA_FROM_NAME:latest
             CSA_GOOGLE_DRIVE_CLIENT_ID=CSA_GOOGLE_DRIVE_CLIENT_ID:latest
