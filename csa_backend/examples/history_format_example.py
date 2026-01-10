@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Example demonstrating the new JSONB history format.
+Example demonstrating the new JSONB history format
 
 OLD FORMAT (strings):
 ["User: Where are your global locations?", "Bot: We have offices worldwide...", "User: yes", "Bot: Great! Would you like to book a demo?"]
