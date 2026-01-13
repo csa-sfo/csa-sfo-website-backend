@@ -91,6 +91,7 @@ jobs:
             CSA_TO_EMAIL_1=CSA_TO_EMAIL_1:latest
             CSA_VAPI_KEY=CSA_VAPI_KEY:latest
             CSA_SUPABASE_ACCESS_TOKEN=CSA_SUPABASE_ACCESS_TOKEN:latest
+            GOOGLE_DRIVE_TOKEN_BASE64=GOOGLE_DRIVE_TOKEN_BASE64:latest
           flags: >
             --service-account=csasfo-runtime-sa@${{ env.PROJECT_ID }}.iam.gserviceaccount.com
             --allow-unauthenticated
