@@ -90,6 +90,7 @@ jobs:
             CSA_TEAMS_WEBHOOK_URL_VAPI=CSA_TEAMS_WEBHOOK_URL_VAPI:latest
             CSA_TO_EMAIL_1=CSA_TO_EMAIL_1:latest
             CSA_VAPI_KEY=CSA_VAPI_KEY:latest
+            CSA_SUPABASE_ACCESS_TOKEN=CSA_SUPABASE_ACCESS_TOKEN:latest
           flags: >
             --service-account=csasfo-runtime-sa@${{ env.PROJECT_ID }}.iam.gserviceaccount.com
             --allow-unauthenticated
