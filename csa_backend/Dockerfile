@@ -3,9 +3,11 @@
 FROM python:3.11-slim AS base
 WORKDIR /app
 
-# Install system dependencies that might be needed
+# Install system dependencies that might be needed (includes npm)
 RUN apt-get update && apt-get install -y \
     curl \
+    nodejs \
+    npm \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements first to leverage Docker cache
