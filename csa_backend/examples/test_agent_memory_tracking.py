@@ -24,7 +24,7 @@ def test_memory_update_coverage():
         with open(router_file, 'r') as f:
             content = f.read()
     except Exception as e:
-        print(f"❌ Could not read router file: {e}")
+        print(f"Could not read router file: {e}")
         return
     
     # Check for all agent responses and their memory updates
