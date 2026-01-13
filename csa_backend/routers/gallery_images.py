@@ -4,14 +4,17 @@ Handles gallery images from Google Drive, matching them to events by folder name
 Separate from image_captions which is used for Events slideshow
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import JSONResponse, Response
 from typing import Optional, Dict, List
 from db.supabase import get_supabase_client
 from services.google_drive_service import get_google_drive_service
+from services.auth_services import verify_token
+from services.google_drive_sync_service import sync_all_drive_folders
 from config.logging import setup_logging
 import logging
 import re
+import asyncio
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -300,5 +303,54 @@ async def proxy_google_drive_image(file_id: str):
         raise HTTPException(
             status_code=500,
             detail=f"Failed to proxy image: {str(e)}"
+        )
+
+
+@gallery_images_router.post("/sync-all")
+async def sync_all_folders_manual(token_data: dict = Depends(verify_token)):
+    """
+    Manually trigger sync of all Google Drive folders to database
+    Admin only endpoint - useful for testing or forcing a sync
+    
+    This endpoint will:
+    1. Check all folders in Google Drive
+    2. Sync images from each folder to the gallery_images table
+    3. Remove deleted images from the database
+    
+    Returns:
+        JSON response with sync results
+    """
+    try:
+        drive_service = get_google_drive_service()
+        if not drive_service or not drive_service.service:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Google Drive service not available. "
+                    "Authentication failed - check logs for details. "
+                    "You may need to re-authenticate by updating GOOGLE_DRIVE_TOKEN_BASE64."
+                )
+            )
+        
+        logger.info(f"Manual sync triggered by {token_data.get('email', 'unknown')}")
+        
+        # Run the sync (this is async, so we await it)
+        await sync_all_drive_folders()
+        
+        return JSONResponse(
+            status_code=200,
+            content={
+                "message": "Sync completed successfully",
+                "status": "success"
+            }
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in manual sync: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to sync folders: {str(e)}"
         )
 

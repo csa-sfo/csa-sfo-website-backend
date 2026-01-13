@@ -21,7 +21,7 @@ google_drive_webhook_router = APIRouter()
 
 # Debounce webhook notifications to prevent too many simultaneous syncs
 _last_notification_time = None
-_notification_debounce_seconds = 5  # Wait 5 seconds between syncs
+_notification_debounce_seconds = 10  # Wait 10 seconds between syncs to avoid excessive API calls (deletions bypass this)
 
 
 class GoogleDriveNotification(BaseModel):
@@ -80,6 +80,10 @@ async def google_drive_webhook_post(request: Request, background_tasks: Backgrou
         # "sync" = initial sync, "update" = file changed, "trash" = file deleted
         resource_state = notification_data.get("resourceState")
         
+        # Also check X-Goog-Resource-State header (Google Drive may send it in headers)
+        if not resource_state:
+            resource_state = headers.get("X-Goog-Resource-State") or headers.get("x-goog-resource-state")
+        
         # IMPORTANT: Process in background to avoid timeout
         # Google Drive expects a response within ~10 seconds
         # Sync can take longer, so we return immediately and process async
@@ -104,14 +108,18 @@ async def process_drive_change_notification(notification_data: Dict):
     """
     Process a Google Drive change notification and sync affected folders
     
-    Includes debouncing to prevent too many simultaneous syncs
+    Includes debouncing to prevent too many simultaneous syncs, but processes deletions immediately
     """
     global _last_notification_time
     
     try:
-        # Debounce: Skip if we just processed a notification recently
+        resource_state = notification_data.get("resourceState")
+        is_deletion = resource_state == "trash"
+        
+        # For deletions, process immediately without debouncing to ensure quick removal
+        # For other changes, use debouncing to prevent too many syncs
         now = datetime.now()
-        if _last_notification_time:
+        if not is_deletion and _last_notification_time:
             time_since_last = (now - _last_notification_time).total_seconds()
             if time_since_last < _notification_debounce_seconds:
                 logger.debug(f"Skipping notification (debounced, last sync was {time_since_last:.1f}s ago)")
@@ -121,10 +129,17 @@ async def process_drive_change_notification(notification_data: Dict):
         
         drive_service = get_google_drive_service()
         if not drive_service or not drive_service.service:
-            logger.warning("Google Drive service not available, skipping notification processing")
+            logger.error(
+                "Google Drive service not available, skipping notification processing. "
+                "This usually means authentication failed. Check logs for authentication errors. "
+                "Images will not be synced until authentication is fixed."
+            )
             return
         
-        logger.info("Processing Google Drive change notification - syncing all folders")
+        if is_deletion:
+            logger.info("Processing Google Drive DELETE notification - syncing all folders immediately")
+        else:
+            logger.info("Processing Google Drive change notification - syncing all folders")
         
         # Simplified approach: When we receive a notification, sync all folders
         # This is more reliable than trying to parse specific changes
