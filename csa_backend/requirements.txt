@@ -38,8 +38,9 @@ Pillow==10.4.0
 fastapi-cache2[redis]==0.2.1
 redis==4.6.0
 
-langchain-openai
-mcp
-langchain-mcp-adapters
-langchain
-langchain-core
+langchain-openai>=0.3.0
+langchain-core>=0.3.10
+langchain>=0.3.10
+langgraph>=0.1.19
+langchain-mcp-adapters>=0.1.0
+mcp>=0.2.0
