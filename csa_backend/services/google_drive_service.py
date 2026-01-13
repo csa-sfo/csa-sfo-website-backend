@@ -48,6 +48,7 @@ class GoogleDriveService:
     
     def __init__(self):
         self.service = None
+        self._creds = None  # Store credentials for token refresh
         self.client_id = GOOGLE_DRIVE_CLIENT_ID
         self.client_secret = GOOGLE_DRIVE_CLIENT_SECRET
         self.credentials_file = GOOGLE_DRIVE_CREDENTIALS_FILE
@@ -103,9 +104,44 @@ class GoogleDriveService:
         if not creds or not creds.valid:
             if creds and creds.expired and creds.refresh_token:
                 try:
+                    logger.info("Access token expired, attempting to refresh using refresh token...")
                     creds.refresh(Request())
+                    logger.info("✓ Successfully refreshed access token")
+                    
+                    # Save the refreshed token back to environment variable (if using env var)
+                    # Note: This updates the in-memory token, but you'll need to update the env var manually
+                    # or use a token file for automatic persistence
+                    try:
+                        import base64
+                        token_bytes = pickle.dumps(creds)
+                        token_base64 = base64.b64encode(token_bytes).decode('utf-8')
+                        logger.info("Refreshed token ready. Update GOOGLE_DRIVE_TOKEN_BASE64 with the new token if needed.")
+                        logger.debug(f"New token (first 50 chars): {token_base64[:50]}...")
+                    except Exception as save_error:
+                        logger.warning(f"Could not encode refreshed token: {save_error}")
+                        
                 except Exception as e:
-                    logger.error(f"Error refreshing credentials: {e}")
+                    error_msg = str(e)
+                    logger.error(f"✗ Failed to refresh credentials: {error_msg}")
+                    
+                    # Provide helpful error messages based on the error type
+                    if 'invalid_grant' in error_msg.lower():
+                        logger.error("=" * 60)
+                        logger.error("REFRESH TOKEN EXPIRED OR REVOKED")
+                        logger.error("=" * 60)
+                        logger.error("The refresh token has expired or been revoked. This can happen if:")
+                        logger.error("  1. The app is in 'Testing' mode (tokens expire after 7 days)")
+                        logger.error("  2. The user revoked access in their Google account")
+                        logger.error("  3. The token was unused for 6+ months")
+                        logger.error("  4. The user changed their password")
+                        logger.error("")
+                        logger.error("SOLUTION: Re-authenticate to get a new refresh token:")
+                        logger.error("  1. Visit the auth URL shown below")
+                        logger.error("  2. Complete the OAuth flow")
+                        logger.error("  3. Update GOOGLE_DRIVE_TOKEN_BASE64 with the new token")
+                        logger.error("=" * 60)
+                    else:
+                        logger.error(f"Unexpected error during token refresh: {error_msg}")
                     creds = None
             
             if not creds:
@@ -163,11 +199,23 @@ class GoogleDriveService:
             
             if creds:
                 logger.info("New credentials obtained. Update GOOGLE_DRIVE_TOKEN_BASE64 with the new token")
+                # Log token expiration info for diagnostics
+                if hasattr(creds, 'expiry') and creds.expiry:
+                    from datetime import datetime
+                    expiry_time = datetime.fromtimestamp(creds.expiry)
+                    logger.info(f"Access token expires at: {expiry_time}")
+                if hasattr(creds, 'refresh_token') and creds.refresh_token:
+                    logger.info("✓ Refresh token available - automatic token refresh enabled")
+                else:
+                    logger.warning("⚠ No refresh token - tokens will expire and require manual re-authentication")
         
         if creds:
             try:
                 self.service = build('drive', 'v3', credentials=creds)
                 logger.info("Google Drive API authenticated successfully")
+                
+                # Store credentials for potential future refresh
+                self._creds = creds
             except Exception as e:
                 logger.error(f"Error building Drive service: {e}")
     
@@ -414,6 +462,37 @@ class GoogleDriveService:
         except Exception as e:
             logger.error(f"Unexpected error getting public URL: {e}")
             return f"https://drive.google.com/uc?export=view&id={file_id}"
+    
+    def file_exists(self, file_id: str) -> bool:
+        """
+        Check if a file exists in Google Drive and is not trashed
+        
+        Args:
+            file_id: Google Drive file ID
+        
+        Returns:
+            True if file exists and is not trashed, False otherwise
+        """
+        if not self.service:
+            return False
+        
+        try:
+            file_metadata = self.service.files().get(
+                fileId=file_id,
+                fields='id,trashed'
+            ).execute()
+            
+            # File exists if it's not trashed
+            return not file_metadata.get('trashed', False)
+        except HttpError as e:
+            # File not found or access denied
+            if e.resp.status == 404:
+                return False
+            logger.warning(f"Error checking file existence for {file_id}: {e}")
+            return False
+        except Exception as e:
+            logger.warning(f"Unexpected error checking file existence: {e}")
+            return False
     
     def get_images_from_event_folder(self, event_title: str) -> List[Tuple[str, str, str]]:
         """
