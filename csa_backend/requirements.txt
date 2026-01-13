@@ -42,4 +42,4 @@ langchain-openai
 mcp
 langchain-mcp-adapters
 langchain
-langchain_core
+langchain-core
