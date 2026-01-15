@@ -1,53 +1,135 @@
 from models.request_models import ContactForm
 from services.openai_service import run_openai_prompt
-from config.settings import FROM_EMAIL, TO_EMAIL, MAILERSEND_API_KEY, FROM_NAME, OPENAI_MODEL
+from config.settings import (
+    TO_EMAIL, OPENAI_MODEL,
+    AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION,
+    AWS_SES_FROM_EMAIL, AWS_SES_FROM_NAME
+)
 import logging
 from pydantic import EmailStr
 import logging, html2text
-from mailersend import emails
 import re
 from typing import Optional, Dict, Any
+from datetime import datetime
 
-# Create the client once – internal httpx session is re-used
-_mailer = emails.NewEmail(MAILERSEND_API_KEY)
+# boto3 import for AWS SES
+try:
+    import boto3
+    from botocore.exceptions import ClientError
+    BOTO3_AVAILABLE = True
+except ImportError:
+    BOTO3_AVAILABLE = False
+    boto3 = None
+    ClientError = Exception
+    logging.error("boto3 is not installed. Install with: pip install boto3")
 
-_FROM_EMAIL = FROM_EMAIL
-_FROM_NAME  = FROM_NAME
+# AWS SES client (created on first use)
+_ses_client = None
 
-# Debug: Check if API key is loaded
+def get_ses_client():
+    """Get or create AWS SES client"""
+    global _ses_client
+    if not BOTO3_AVAILABLE:
+        raise ImportError("boto3 is not installed. Install with: pip install boto3")
+    if not AWS_ACCESS_KEY_ID or not AWS_SECRET_ACCESS_KEY:
+        raise ValueError("AWS SES credentials not configured. Set CSA_AWS_ACCESS_KEY_ID and CSA_AWS_SECRET_ACCESS_KEY")
+    if _ses_client is None:
+        _ses_client = boto3.client(
+            'ses',
+            aws_access_key_id=AWS_ACCESS_KEY_ID,
+            aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
+            region_name=AWS_REGION
+        )
+    return _ses_client
 
 
-async def send_mailersend(
+async def send_aws_ses(
     *,
     subject: str,
     html_body: str,
     to_email: EmailStr,
-) -> None:
+) -> Dict[str, Any]:
     """
-    Send an email via MailerSend SDK.
-    Raises RuntimeError / ValueError from SDK on failure.
+    Send an email via AWS SES.
+    Returns response from SES API.
     """
+    import asyncio
+    from concurrent.futures import ThreadPoolExecutor
+    
+    ses_client = get_ses_client()
+    
+    # Convert HTML to plain text for SES
+    plain_text = html2text.html2text(html_body).strip()
+    
+    def _send_email_sync():
+        """Synchronous wrapper for boto3 SES call"""
+        try:
+            response = ses_client.send_email(
+                Source=f"{AWS_SES_FROM_NAME} <{AWS_SES_FROM_EMAIL}>",
+                Destination={
+                    'ToAddresses': [str(to_email)]
+                },
+                Message={
+                    'Subject': {
+                        'Data': subject,
+                        'Charset': 'UTF-8'
+                    },
+                    'Body': {
+                        'Html': {
+                            'Data': html_body,
+                            'Charset': 'UTF-8'
+                        },
+                        'Text': {
+                            'Data': plain_text,
+                            'Charset': 'UTF-8'
+                        }
+                    }
+                }
+            )
+            return response
+        except ClientError as e:
+            error_code = e.response['Error']['Code']
+            error_message = e.response['Error']['Message']
+            logging.error(f"AWS SES error ({error_code}): {error_message}")
+            raise
+        except Exception as e:
+            logging.error(f"Error sending email via AWS SES: {e}")
+            raise
+    
+    # Run boto3 call in thread pool since it's synchronous
+    loop = asyncio.get_event_loop()
+    executor = ThreadPoolExecutor()
+    try:
+        response = await loop.run_in_executor(executor, _send_email_sync)
+        message_id = response.get('MessageId', 'unknown')
+        logging.info(f"AWS SES email sent successfully. MessageId: {message_id}")
+        logging.info(f"  To: {to_email}")
+        logging.info(f"  Subject: {subject}")
+        return response
+    finally:
+        executor.shutdown(wait=False)
 
-    logging.info(f"MAILERSEND_API_KEY loaded: {'Yes' if MAILERSEND_API_KEY else 'No'}")
-    if MAILERSEND_API_KEY:
-        logging.info(f"API Key starts with: {MAILERSEND_API_KEY[:10]}...")
-    mail = {}                                              # body container
 
-    _mailer.set_mail_from({"email": _FROM_EMAIL,
-                           "name":  _FROM_NAME}, mail)
-    _mailer.set_mail_to([{"email": str(to_email)}], mail)
-    _mailer.set_subject(subject, mail)
-    _mailer.set_html_content(html_body, mail)
-
-    # quick plaintext: HTML→text so Gmail dark-mode previews look sane
-    _mailer.set_plaintext_content(
-        html2text.html2text(html_body).strip(), mail
+async def send_email(
+    *,
+    subject: str,
+    html_body: str,
+    to_email: EmailStr,
+) -> Dict[str, Any]:
+    """
+    Send an email using AWS SES.
+    """
+    if not BOTO3_AVAILABLE:
+        raise ImportError("boto3 is not installed. Install with: pip install boto3")
+    if not AWS_ACCESS_KEY_ID or not AWS_SECRET_ACCESS_KEY:
+        raise ValueError("AWS SES credentials not configured. Set CSA_AWS_ACCESS_KEY_ID and CSA_AWS_SECRET_ACCESS_KEY")
+    
+    logging.info("Sending email via AWS SES...")
+    return await send_aws_ses(
+        subject=subject,
+        html_body=html_body,
+        to_email=to_email
     )
-
-    # Fire & forget – API returns 202 JSON on success
-    resp = _mailer.send(mail)
-    logging.info("MailerSend response: %s", resp)           # optional
-    return resp
 
 
 
@@ -193,7 +275,7 @@ async def send_invoice_email(
         )
         
         # Send the email
-        response = await send_mailersend(
+        response = await send_email(
             to_email=to_email,
             subject=subject,
             html_body=html_content
@@ -219,8 +301,8 @@ async def process_contact(form: ContactForm, is_bot: bool = True):
                 f"New Business Enquiry through Contact US Form {form.name}"
                 + (f" ({form.company})" if form.company else "")
             ) 
-        # TO_EMAIL = TO_EMAIL
-        await send_mailersend(
+        # Send email via AWS SES
+        await send_email(
             subject=subject,
             html_body=html_body,
             to_email=TO_EMAIL,

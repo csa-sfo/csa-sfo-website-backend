@@ -202,7 +202,11 @@ class GoogleDriveService:
                 # Log token expiration info for diagnostics
                 if hasattr(creds, 'expiry') and creds.expiry:
                     from datetime import datetime
-                    expiry_time = datetime.fromtimestamp(creds.expiry)
+                    # Handle both datetime object and timestamp (float/int)
+                    if isinstance(creds.expiry, datetime):
+                        expiry_time = creds.expiry
+                    else:
+                        expiry_time = datetime.fromtimestamp(creds.expiry)
                     logger.info(f"Access token expires at: {expiry_time}")
                 if hasattr(creds, 'refresh_token') and creds.refresh_token:
                     logger.info("✓ Refresh token available - automatic token refresh enabled")
