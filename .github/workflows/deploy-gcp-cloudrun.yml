@@ -92,6 +92,12 @@ jobs:
             CSA_VAPI_KEY=CSA_VAPI_KEY:latest
             CSA_SUPABASE_ACCESS_TOKEN=CSA_SUPABASE_ACCESS_TOKEN:latest
             GOOGLE_DRIVE_TOKEN_BASE64=GOOGLE_DRIVE_TOKEN_BASE64:latest
+            CSA_AWS_ACCESS_KEY_ID=CSA_AWS_ACCESS_KEY_ID:latest
+            CSA_AWS_SECRET_ACCESS_KEY=CSA_AWS_SECRET_ACCESS_KEY:latest
+            CSA_AWS_REGION=CSA_AWS_REGION:latest
+            CSA_AWS_SES_FROM_EMAIL=CSA_AWS_SES_FROM_EMAIL:latest
+            CSA_AWS_SES_FROM_NAME=CSA_AWS_SES_FROM_NAME:latest
+            CSA_FRONTEND_URL=CSA_FRONTEND_URL:latest
           flags: >
             --service-account=csasfo-runtime-sa@${{ env.PROJECT_ID }}.iam.gserviceaccount.com
             --allow-unauthenticated
