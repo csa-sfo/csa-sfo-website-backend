@@ -33,4 +33,5 @@ stripe==8.10.0
 
 fastapi-cache2[redis]==0.2.1
 redis==4.6.0
+fastmcp>=0.1.0
 
