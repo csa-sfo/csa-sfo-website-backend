@@ -100,31 +100,76 @@ async def get_gallery_images():
                 }
             )
         
-        # Group images by folder_name
+        # Group images by folder_name, but also track event_id for better matching
         images_by_folder: Dict[str, List[dict]] = {}
+        images_by_event_id: Dict[str, List[dict]] = {}  # Group by event_id if available
+        
         for img in gallery_images:
             folder_name = img.get('folder_name', '').strip()
             image_url = img.get('image_url', '').strip()
+            event_id = img.get('event_id')
             
+            # Convert Google Drive URLs to proxy URLs to bypass CORS
+            proxy_url = convert_drive_url_to_proxy(image_url)
             
+            image_data = {
+                'url': proxy_url,
+                'name': img.get('filename', ''),
+                'caption': img.get('caption', ''),
+                'created_at': img.get('created_at'),
+                'event_id': event_id,
+                'folder_name': folder_name
+            }
+            
+            # Group by folder_name (for backward compatibility)
             if folder_name:
                 if folder_name not in images_by_folder:
                     images_by_folder[folder_name] = []
-                
-                # Convert Google Drive URLs to proxy URLs to bypass CORS
-                proxy_url = convert_drive_url_to_proxy(image_url)
-                
-                images_by_folder[folder_name].append({
-                    'url': proxy_url,
-                    'name': img.get('filename', ''),
-                    'caption': img.get('caption', ''),
-                    'created_at': img.get('created_at')
-                })
+                images_by_folder[folder_name].append(image_data)
+            
+            # Also group by event_id if available (for better event matching)
+            if event_id:
+                if event_id not in images_by_event_id:
+                    images_by_event_id[event_id] = []
+                images_by_event_id[event_id].append(image_data)
         
         
         # Create gallery events from grouped images
+        # First, process images grouped by event_id (more reliable)
+        processed_event_ids = set()
         gallery_events = []
+        
+        for event_id, images in images_by_event_id.items():
+            if event_id in processed_event_ids:
+                continue
+            processed_event_ids.add(event_id)
+            
+            # Get event details using event_id
+            if event_id in events_by_id:
+                matching_event = events_by_id[event_id]
+                gallery_events.append({
+                    'id': f"gallery-{matching_event['id']}",
+                    'eventTitle': matching_event['title'],
+                    'date': matching_event['date_time'].split('T')[0] if matching_event.get('date_time') else '',
+                    'location': matching_event.get('location', ''),
+                    'tags': matching_event.get('tags', []) or [],
+                    'photos': [{'url': img['url'], 'name': img['name'], 'caption': img['caption'], 'created_at': img['created_at']} for img in images]
+                })
+                logger.info(f"Created gallery event from event_id {event_id}: {matching_event['title']} with {len(images)} image(s)")
+        
+        # Then process remaining images grouped by folder_name
+        # Skip if already processed via event_id
         for folder_name, images in images_by_folder.items():
+            # Check if any images in this folder already have an event_id that was processed
+            skip_folder = False
+            for img in images:
+                if img.get('event_id') and img.get('event_id') in processed_event_ids:
+                    skip_folder = True
+                    break
+            if skip_folder:
+                logger.debug(f"Skipping folder '{folder_name}' - already processed via event_id")
+                continue
+            
             # Try to find matching event - try multiple matching strategies
             folder_name_lower = folder_name.lower().strip()
             matching_event = events_by_title.get(folder_name_lower)
@@ -156,14 +201,17 @@ async def get_gallery_images():
             
             if matching_event:
                 # Match found - use full event data including location, tags, date
+                # Convert images to proper format
+                photo_list = [{'url': img['url'], 'name': img['name'], 'caption': img['caption'], 'created_at': img['created_at']} for img in images]
                 gallery_events.append({
                     'id': f"gallery-{matching_event['id']}",
                     'eventTitle': matching_event['title'],
                     'date': matching_event['date_time'].split('T')[0] if matching_event.get('date_time') else '',
                     'location': matching_event.get('location', ''),
                     'tags': matching_event.get('tags', []) or [],  # Ensure it's always an array
-                    'photos': images
+                    'photos': photo_list
                 })
+                logger.info(f"Created gallery event from folder '{folder_name}': {matching_event['title']} with {len(images)} image(s)")
             else:
                 # No matching event - create gallery event from folder name
                 # Try to get event details from gallery_images table if event_id exists
@@ -215,10 +263,15 @@ async def get_gallery_images():
                 if photo_url and (photo_url.startswith('http://') or photo_url.startswith('https://') or photo_url.startswith('/')):
                     valid_photos.append(photo)
                     total_valid_images += 1
+                else:
+                    logger.warning(f"Filtered out invalid photo URL for event '{event['eventTitle']}': {photo_url[:50] if photo_url else 'empty'}")
             
             if valid_photos:
                 event['photos'] = valid_photos
                 filtered_events.append(event)
+                logger.info(f"Including event '{event['eventTitle']}' with {len(valid_photos)} valid photo(s)")
+            else:
+                logger.warning(f"Excluding event '{event['eventTitle']}' - no valid photos (had {len(event['photos'])} photos before filtering)")
         
         
         return JSONResponse(
@@ -352,5 +405,104 @@ async def sync_all_folders_manual(token_data: dict = Depends(verify_token)):
         raise HTTPException(
             status_code=500,
             detail=f"Failed to sync folders: {str(e)}"
+        )
+
+
+@gallery_images_router.post("/test-sync")
+async def test_sync_now(token_data: dict = Depends(verify_token)):
+    """
+    Test endpoint to trigger sync immediately (for testing/debugging)
+    Requires authentication - admin only
+    """
+    try:
+        from services.google_drive_sync_service import sync_all_drive_folders
+        logger.info(f"Test sync triggered by {token_data.get('email', 'unknown')} - syncing all folders now")
+        await sync_all_drive_folders()
+        return JSONResponse(
+            status_code=200,
+            content={
+                "message": "Test sync completed",
+                "status": "success"
+            }
+        )
+    except Exception as e:
+        logger.error(f"Error in test sync: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Test sync failed: {str(e)}"
+        )
+
+
+@gallery_images_router.get("/debug/folders")
+async def debug_folder_matching():
+    """
+    Debug endpoint to see folder names and event matching
+    Admin/debug endpoint - shows folder names and their matches
+    """
+    try:
+        supabase = get_supabase_client()
+        
+        # Get all events
+        events_response = supabase.table('events').select('id, title').execute()
+        events = {e['id']: e['title'] for e in (events_response.data or [])}
+        
+        # Get all gallery images
+        gallery_response = supabase.table('gallery_images').select('id, folder_name, event_id, filename').execute()
+        gallery_images = gallery_response.data if gallery_response.data else []
+        
+        # Group by folder
+        from collections import defaultdict
+        by_folder = defaultdict(list)
+        for img in gallery_images:
+            folder = img.get('folder_name', '').strip() or 'NO_FOLDER'
+            by_folder[folder].append(img)
+        
+        result = {
+            "total_images": len(gallery_images),
+            "total_folders": len(by_folder),
+            "folders": []
+        }
+        
+        for folder_name, images in by_folder.items():
+            folder_info = {
+                "folder_name": folder_name,
+                "image_count": len(images),
+                "images": [{"filename": img.get('filename'), "event_id": img.get('event_id')} for img in images],
+                "matched_event": None
+            }
+            
+            # Check for exact match
+            folder_lower = folder_name.lower().strip()
+            for event_id, event_title in events.items():
+                if event_title.lower().strip() == folder_lower:
+                    folder_info["matched_event"] = {
+                        "id": event_id,
+                        "title": event_title,
+                        "match_type": "exact"
+                    }
+                    break
+            
+            # Check if any image has event_id
+            event_ids = set(img.get('event_id') for img in images if img.get('event_id'))
+            if event_ids:
+                folder_info["event_ids_in_images"] = list(event_ids)
+                for event_id in event_ids:
+                    if event_id in events:
+                        folder_info["matched_event"] = {
+                            "id": event_id,
+                            "title": events[event_id],
+                            "match_type": "via_event_id"
+                        }
+                        break
+            
+            result["folders"].append(folder_info)
+        
+        return JSONResponse(status_code=200, content=result)
+        
+    except Exception as e:
+        logger.error(f"Error in debug endpoint: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to get debug info: {str(e)}"
         )
 

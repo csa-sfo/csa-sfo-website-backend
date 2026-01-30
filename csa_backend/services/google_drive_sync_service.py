@@ -33,12 +33,12 @@ async def sync_all_drive_folders():
     
     # Prevent concurrent syncs - if one is already running, skip this one
     if _sync_in_progress:
-        logger.debug("Sync already in progress, skipping concurrent sync request")
+        logger.info("⚠️ Sync already in progress, skipping concurrent sync request")
         return
     
     async with _sync_lock:
         if _sync_in_progress:
-            logger.debug("Sync already in progress (double-check), skipping")
+            logger.info("⚠️ Sync already in progress (double-check), skipping")
             return
         
         _sync_in_progress = True
@@ -73,13 +73,18 @@ async def sync_all_drive_folders():
                 logger.info("No folders found in Google Drive to sync")
                 return
             
+            logger.info(f"Found {len(folders)} folder(s) to sync: {list(folders.keys())}")
             
             for folder_name, folder_id in folders.items():
                 try:
+                    logger.info(f"Syncing folder: '{folder_name}' (ID: {folder_id})")
                     await _sync_folder_if_updated(drive_service, folder_name, folder_id)
+                    logger.info(f"✓ Completed syncing folder: '{folder_name}'")
                 except Exception as e:
                     logger.error(f"Error syncing folder '{folder_name}': {e}")
                     continue
+            
+            logger.info(f"✓ Completed syncing all {len(folders)} folder(s)")
         
         except Exception as e:
             logger.error(f"Error in sync_all_drive_folders: {e}", exc_info=True)
@@ -151,22 +156,26 @@ async def _sync_folder_if_updated(
 ):
     """
     Check if a folder has new images and sync them if needed
+    Also detects deleted images even when folder is empty
     """
     try:
         # List images in the folder (run in executor since it's synchronous)
         loop = asyncio.get_event_loop()
         images = await loop.run_in_executor(None, drive_service.list_images_in_folder, folder_id)
         
-        if not images:
-            # No images in folder, skip
-            return
+        # IMPORTANT: Don't skip empty folders - we need to sync to detect deleted images
+        # The sync function will check for deleted images even when the folder is empty
+        current_image_count = len(images) if images else 0
         
-        current_image_count = len(images)
+        if not images:
+            logger.debug(f"Folder '{folder_name}' is empty - will sync to detect deleted images")
+        
         last_sync_time = _folder_last_sync.get(folder_name)
         last_image_count = _folder_last_image_count.get(folder_name, 0)
         
         # Always sync to ensure all images are checked (duplicate detection will handle skipping)
         # This ensures we catch cases where images were added but not synced due to errors
+        # AND also detects when images were deleted (folder might be empty now)
         
         # Sync images for this folder (using folder name as event title)
         # Run in executor since sync_event_images_from_drive is synchronous
@@ -177,10 +186,14 @@ async def _sync_folder_if_updated(
             synced_count = sync_result.get('synced_count', 0)
             skipped_count = sync_result.get('skipped_count', 0)
             failed_count = sync_result.get('failed_count', 0)
+            deleted_count = sync_result.get('deleted_count', 0)
             
             # Update tracking
             _folder_last_sync[folder_name] = datetime.now()
             _folder_last_image_count[folder_name] = current_image_count
+            
+            if deleted_count > 0:
+                logger.info(f"✓ Removed {deleted_count} deleted image(s) from folder '{folder_name}'")
         else:
             logger.warning(f"Failed to sync images from folder '{folder_name}': {sync_result.get('message')}")
             
