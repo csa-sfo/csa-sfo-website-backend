@@ -74,7 +74,10 @@ async def google_drive_webhook_post(request: Request, background_tasks: Backgrou
         except:
             notification_data = {}
         
+        logger.info("=" * 60)
         logger.info("Google Drive webhook notification received")
+        logger.info(f"Webhook payload keys: {list(notification_data.keys())}")
+        logger.info(f"Webhook headers (relevant): {[(k, v) for k, v in headers.items() if 'goog' in k.lower() or 'resource' in k.lower()]}")
         
         # Google Drive sends notifications with resourceState field
         # "sync" = initial sync, "update" = file changed, "trash" = file deleted
@@ -84,10 +87,18 @@ async def google_drive_webhook_post(request: Request, background_tasks: Backgrou
         if not resource_state:
             resource_state = headers.get("X-Goog-Resource-State") or headers.get("x-goog-resource-state")
         
+        logger.info(f"Detected resourceState: {resource_state or 'NOT FOUND'}")
+        
+        # IMPORTANT: Add resourceState to notification_data so background task can access it
+        # Google Drive often sends resourceState in headers, not body
+        if resource_state and "resourceState" not in notification_data:
+            notification_data["resourceState"] = resource_state
+        
         # IMPORTANT: Process in background to avoid timeout
         # Google Drive expects a response within ~10 seconds
         # Sync can take longer, so we return immediately and process async
         logger.info(f"Queueing notification for background processing (resourceState: {resource_state or 'unknown'})")
+        logger.info("=" * 60)
         
         # Schedule background task - this runs after the response is sent
         background_tasks.add_task(process_drive_change_notification, notification_data)
@@ -113,6 +124,7 @@ async def process_drive_change_notification(notification_data: Dict):
     global _last_notification_time
     
     try:
+        logger.info("Processing Google Drive notification in background task...")
         resource_state = notification_data.get("resourceState")
         is_deletion = resource_state == "trash"
         
@@ -122,10 +134,11 @@ async def process_drive_change_notification(notification_data: Dict):
         if not is_deletion and _last_notification_time:
             time_since_last = (now - _last_notification_time).total_seconds()
             if time_since_last < _notification_debounce_seconds:
-                logger.debug(f"Skipping notification (debounced, last sync was {time_since_last:.1f}s ago)")
+                logger.info(f"⚠️ Skipping notification (debounced, last sync was {time_since_last:.1f}s ago)")
                 return
         
         _last_notification_time = now
+        logger.info(f"✅ Processing notification (resourceState: {resource_state}, is_deletion: {is_deletion})")
         
         drive_service = get_google_drive_service()
         if not drive_service or not drive_service.service:
@@ -155,8 +168,10 @@ async def sync_all_folders_on_notification():
     Fallback: sync all folders when we can't determine which specific folder changed
     """
     try:
+        logger.info("Starting sync of all folders from webhook notification")
         from services.google_drive_sync_service import sync_all_drive_folders
         await sync_all_drive_folders()
+        logger.info("Completed sync of all folders from webhook notification")
     except Exception as e:
-        logger.error(f"Error in fallback folder sync: {e}")
+        logger.error(f"Error in fallback folder sync: {e}", exc_info=True)
 

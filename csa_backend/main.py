@@ -110,8 +110,11 @@ async def lifespan(app: FastAPI):
                 watch_success = await setup_google_drive_watch()
                 if watch_success:
                     logger.info("✓ Google Drive push notifications enabled - real-time sync active")
-                    logger.info("  Polling disabled - using webhooks only (polling can be enabled by setting CSA_GOOGLE_DRIVE_SYNC_INTERVAL)")
-                    # Polling disabled when webhooks are active to avoid excessive API calls
+                    # Enable polling as fallback with longer interval (webhooks are primary, polling is backup)
+                    # This ensures sync happens even if webhooks fail or are delayed
+                    fallback_interval = max(sync_interval, 30)  # At least 30 minutes, or use configured interval
+                    loop.create_task(start_google_drive_sync_task(fallback_interval, enabled=True))
+                    logger.info(f"  Polling fallback enabled (checking every {fallback_interval} minutes as backup)")
                 else:
                     logger.warning("Failed to set up push notifications, falling back to polling")
                     # Fallback to polling if watch setup fails (check every 60 minutes)

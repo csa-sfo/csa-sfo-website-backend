@@ -426,11 +426,11 @@ async def sync_images_from_google_drive(
                                 existing_entry_id = existing_img['id']
                                 break
                     
-                    # Also check by stored filename (fallback)
-                    existing_by_filename = supabase.table('gallery_images').select('id').eq('filename', stored_filename).execute()
+                    # Also check by stored filename within the same folder (fallback, but scoped to folder)
+                    existing_by_filename = supabase.table('gallery_images').select('id').eq('filename', stored_filename).eq('folder_name', event_title).execute()
                     if existing_by_filename.data and len(existing_by_filename.data) > 0 and not is_duplicate:
                         is_duplicate = True
-                        duplicate_reason = "same stored filename"
+                        duplicate_reason = "same stored filename in folder"
                         existing_entry_id = existing_by_filename.data[0]['id']
                     
                     if is_duplicate:
@@ -697,11 +697,11 @@ def sync_event_images_from_drive(event_title: str, admin_email: str = None) -> d
                                     existing_entry_id = existing_img['id']
                                     break
                         
-                        # Also check by stored filename (fallback)
-                        existing_by_filename = supabase.table('gallery_images').select('id').eq('filename', stored_filename).execute()
+                        # Also check by stored filename within the same folder (fallback, but scoped to folder)
+                        existing_by_filename = supabase.table('gallery_images').select('id').eq('filename', stored_filename).eq('folder_name', event_title).execute()
                         if existing_by_filename.data and len(existing_by_filename.data) > 0 and not is_duplicate:
                             is_duplicate = True
-                            duplicate_reason = "same stored filename"
+                            duplicate_reason = "same stored filename in folder"
                             existing_entry_id = existing_by_filename.data[0]['id']
                         
                         if is_duplicate:
