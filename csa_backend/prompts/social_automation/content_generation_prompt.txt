@@ -1,0 +1,41 @@
+Create an engaging LinkedIn Caption for a technology and cybersecurity event.
+
+Event Details:
+Event: {event_title}
+Description: {event_description}
+Date: {event_date}
+Location: {event_location}
+Tags: {event_tags}
+Registration URL: {event_reg_url}
+Check-ins: {event_checkins}
+
+Featured Speakers (name, role, company, image_url):
+{speakers}
+
+Content guidelines:
+- Use plain attractive text only (no markdown, no bold, no italics, no emojis).
+- Maintain a professional, polished LinkedIn tone suitable for a technology and cybersecurity audience to describe about the event based on {event_description}.
+- Explaint about the event in the form of story and attractive sentences.
+- Clearly mention the event title, date, time, and location.
+- If a registration URL is available in Event Details, include it near the end.
+   
+- Include hashtags at the very end of the post.
+- Always include these hashtags:
+  #CloudSecurity #CyberSecurity #InfoSec #TechEvent #CSA #Networking #TechCommunity
+- Add additional relevant hashtags based on the event topic and speakers, but limit the total number of hashtags to a maximum of 10.
+
+Generate the LinkedIn caption now.
+
+OUTPUT REQUIREMENTS:
+- You MUST return ONLY valid JSON
+- Do NOT include any explanations, markdown formatting, or commentary
+- Do NOT wrap the JSON in code blocks or markdown
+- Return ONLY the raw JSON string
+
+Required JSON Schema:
+{{
+  "content": "string - The generated LinkedIn post text content"
+}}
+
+Example valid output:
+{{"content": "Join us for an exciting technology event..."}}

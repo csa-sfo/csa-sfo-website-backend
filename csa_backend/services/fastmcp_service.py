@@ -1,6 +1,6 @@
 """
-MCP Service
-Shared utilities for interacting with MCP (Model Context Protocol) server.
+FastMCP Service
+Shared utilities for interacting with MCP (Model Context Protocol) server via FastMCP.
 """
 
 from fastapi import HTTPException, Depends
@@ -57,7 +57,7 @@ async def call_mcp_tool(tool_name: str, arguments: dict) -> dict:
         
         # Connect to MCP server using FastMCP Client
         # The URL should point to the MCP endpoint (typically /mcp for streamable HTTP)
-        mcp_url = f"{MCP_SERVER_URL}/mcp"
+        mcp_url = MCP_SERVER_URL
         client = Client(mcp_url)
         
         async with client:
