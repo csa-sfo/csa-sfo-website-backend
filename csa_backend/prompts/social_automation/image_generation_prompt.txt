@@ -1,0 +1,38 @@
+Generate a professional promotion image for this event using the image generation tool.
+
+Event Details:
+Event: {event_title}
+Description: {event_description}
+Date: {event_date}
+Location: {event_location}
+Tags: {event_tags}
+Registration URL: {event_reg_url}
+Check-ins: {event_checkins}
+
+Speakers (name, role, company): {speakers}
+
+Requirements:
+- Modern, professional design with technology/cloud security and {event_description}.
+- Include the actual title, date, and location text prominently.
+- Image theme should match the {event_description} and make sure don't keep more content inside the image instead add the information in the form of icons.
+- At the bottom of the poster show each speaker's actual name, role, and company (use the exact text from the Speakers list above). Do NOT draw or illustrate speaker faces, avatars, or profile pictures.
+- Use abstract and attractive graphics, icons, shapes, and text.
+- Get Cloud security alliance logo from the browser and keep that at the corner.
+
+TOOL RESULTS:
+- Use ONLY the `image.image.path` field from the tool result in your final answer.
+- Do NOT re-encode the image to base64 in your own output.
+
+OUTPUT REQUIREMENTS:
+- You MUST return ONLY valid JSON
+- Do NOT include any explanations, markdown formatting, or commentary
+- Do NOT wrap the JSON in code blocks or markdown
+- Return ONLY the raw JSON string
+
+Required JSON Schema:
+{{
+  "image_path": "string - Absolute filesystem path to the generated PNG image returned by the Gemini tool"
+}}
+
+Example valid output:
+{{"image_path": "C:/path/to/generated/image.png"}}

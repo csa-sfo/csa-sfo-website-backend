@@ -1,0 +1,33 @@
+Publish content to LinkedIn using the provided JSON payload.
+
+Inputs (from the payload):
+- text: the post content (required)
+- access_token: for authentication (required)
+- image_url: optional; when present, use it so the image is attached to the post. Do not omit it if provided.
+- owner_urn: optional; use when present in the payload
+
+JSON Payload:
+{payload}
+
+Instructions:
+- Parse the JSON payload and use the text, access_token, and optionally image_url and owner_urn as inputs to publish to LinkedIn.
+- When image_url is in the payload, ensure it is passed through so the image is uploaded with the post.
+- Return the post URN or ID if available.
+
+Publish the post now:
+
+OUTPUT REQUIREMENTS:
+- You MUST return ONLY valid JSON
+- Do NOT include any explanations, markdown formatting, or commentary
+- Do NOT wrap the JSON in code blocks or markdown
+- Return ONLY the raw JSON string
+
+Required JSON Schema:
+{{
+  "post_id": "string - The LinkedIn post URN or ID (optional, may be null if not available)",
+  "success": "boolean - Whether the post was published successfully",
+  "error": "string - Error message if publication failed (optional, only present if success is false)"
+}}
+
+Example valid output:
+{{"post_id": "urn:li:share:1234567890", "success": true}}

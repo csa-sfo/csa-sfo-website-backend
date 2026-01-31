@@ -22,10 +22,10 @@ class Settings:
         if not self.openai_api_key:
             raise ValueError("CSA_OPENAI environment variable is required")
         
-        # Pinecone Configuration
+        # Pinecone Configuration (optional - deprecated, using Supabase vector store instead)
         self.pinecone_api_key = os.getenv("CSA_PINECONE")
         if not self.pinecone_api_key:
-            raise ValueError("CSA_PINECONE environment variable is required")
+            print("WARNING: CSA_PINECONE environment variable not set (optional - using Supabase vector store)")
         
         # Supabase Configuration
         self.supabase_url = os.getenv("CSA_SUPABASE_URL")
@@ -82,8 +82,8 @@ class Settings:
 # Create settings instance
 try:
     settings = Settings()
-    print("✅ All required environment variables loaded successfully")
+    print("All required environment variables loaded successfully")
 except Exception as e:
-    print(f"❌ Failed to load environment variables: {e}")
+    print(f"Failed to load environment variables: {e}")
     print("Please check your .env file or environment variables")
     raise

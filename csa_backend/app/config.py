@@ -57,6 +57,10 @@ class Settings(BaseSettings):
     stripe_secret_key: Optional[str] = None
     stripe_webhook_secret: Optional[str] = None
     
+    openai_api_key: str | None = None  
+    pinecone_api_key: str | None = None 
+    model_config = {"env_file": ".env", "extra": "ignore",} 
+    
     @property
     def redis_url(self) -> str:
         """Build Redis URL from components."""
