@@ -73,7 +73,7 @@ STRIPE_WEBHOOK_SECRET = os.getenv("CSA_STRIPE_WEBHOOK_SECRET")
 
 MCP_SERVER_URL = os.getenv("CSA_MCP_SERVER_URL", "https://127.0.0.1:3000/mcp")
 # Frontend Configuration
-FRONTEND_BASE_URL = os.getenv("CSA_FRONTEND_BASE_URL", "http://localhost:8080")
+FRONTEND_BASE_URL = os.getenv("CSA_FRONTEND_URL", "http://localhost:8080")
 
 # LinkedIn OAuth MCP Configuration
 LINKEDIN_REDIRECT_URI = os.getenv("CSA_LINKEDIN_REDIRECT_URI", "http://localhost:8000/v1/routes/linkedin/callback")
