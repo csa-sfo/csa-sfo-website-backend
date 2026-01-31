@@ -95,6 +95,51 @@ async def lifespan(app: FastAPI):
 
         loop = asyncio.get_event_loop()
         loop.create_task(refresh_task())
+        
+        # Start Google Drive push notifications (webhooks) or fallback to polling
+        try:
+            from services.google_drive_sync_service import start_google_drive_sync_task
+            from services.google_drive_watch_service import setup_google_drive_watch
+            from config.settings import GOOGLE_DRIVE_SYNC_INTERVAL, GOOGLE_DRIVE_WEBHOOK_URL
+            sync_interval = GOOGLE_DRIVE_SYNC_INTERVAL
+            
+            # Use polling by default (webhooks are optional)
+            if GOOGLE_DRIVE_WEBHOOK_URL:
+                logger.info(f"Google Drive webhook URL configured: {GOOGLE_DRIVE_WEBHOOK_URL}")
+                # Set up push notifications (real-time)
+                watch_success = await setup_google_drive_watch()
+                if watch_success:
+                    logger.info("✓ Google Drive push notifications enabled - real-time sync active")
+                    # Enable polling as fallback with longer interval (webhooks are primary, polling is backup)
+                    # This ensures sync happens even if webhooks fail or are delayed
+                    fallback_interval = max(sync_interval, 30)  # At least 30 minutes, or use configured interval
+                    loop.create_task(start_google_drive_sync_task(fallback_interval, enabled=True))
+                    logger.info(f"  Polling fallback enabled (checking every {fallback_interval} minutes as backup)")
+                else:
+                    logger.warning("Failed to set up push notifications, falling back to polling")
+                    # Fallback to polling if watch setup fails (check every 60 minutes)
+                    loop.create_task(start_google_drive_sync_task(60, enabled=True))
+            else:
+                # No webhook URL - use polling (default behavior)
+                loop.create_task(start_google_drive_sync_task(sync_interval, enabled=True))
+                logger.info(f"✓ Google Drive polling enabled (checking every {sync_interval} minutes)")
+                logger.info("  Polling will automatically sync images from Google Drive folders")
+                logger.info("  To use webhooks instead, set CSA_GOOGLE_DRIVE_WEBHOOK_URL environment variable")
+            
+            # Perform immediate catch-up sync on startup to handle missed changes
+            # This ensures images uploaded while server was down are synced immediately
+            try:
+                from services.google_drive_sync_service import sync_all_drive_folders
+                logger.info("Performing startup catch-up sync to handle any missed changes...")
+                # Run catch-up sync in background (don't block startup)
+                loop.create_task(sync_all_drive_folders())
+            except Exception as e:
+                logger.warning(f"Failed to perform startup catch-up sync: {e}")
+                # Continue startup - polling will catch up eventually
+        except Exception as e:
+            logger.warning(f"Failed to start Google Drive sync: {e}")
+            logger.warning("Google Drive images will not sync automatically, but manual sync will still work")
+        
         yield
     except Exception as e:
         logger.error(f"Error during lifespan startup: {e}")
@@ -104,7 +149,16 @@ async def lifespan(app: FastAPI):
         if hasattr(app.state, 'scheduler'):
             app.state.scheduler.shutdown()
         if hasattr(app.state, 'redis'):
-            app.state.redis.close()     
+            app.state.redis.close()
+        
+        # Stop Google Drive watch channels on shutdown
+        try:
+            from services.google_drive_watch_service import stop_all_watch_channels
+            await stop_all_watch_channels()
+            logger.info("Stopped all Google Drive watch channels")
+        except Exception as e:
+            logger.warning(f"Error stopping watch channels: {e}")
+        
         pass
 
 # Create the FastAPI app once

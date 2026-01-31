@@ -38,7 +38,7 @@ async def run_engagement_agent(user_message: str, context: str = "", history: li
         f"AI:"
     )
 
-    response = await run_openai_prompt(prompt, model=OPENAI_MODEL)
+    response = await run_openai_prompt(prompt, model=OPENAI_MODEL, history=history)
     return await ensure_markdown(response)
 
 

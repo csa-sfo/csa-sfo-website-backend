@@ -5,6 +5,9 @@ from supabase import create_client, Client
 import os
 from typing import Optional
 from services.auth_services import verify_admin_token
+from services.event_email_scheduler import process_reminder_emails_for_tomorrow, process_thank_you_emails
+from services.event_email_service import send_confirmation_email
+from datetime import datetime
 
 # Initialize router
 event_registration_router = APIRouter()
@@ -41,14 +44,19 @@ async def create_event_registration(registration: EventRegistrationRequest):
         supabase = get_supabase_client()
         
         # Validate user exists in either users or admins table
-        user_response = supabase.table("users").select("id, email").eq("id", registration.user_id).limit(1).execute()
-        admin_response = supabase.table("admins").select("id, email").eq("id", registration.user_id).limit(1).execute()
+        user_response = supabase.table("users").select("id, email, name").eq("id", registration.user_id).limit(1).execute()
+        admin_response = supabase.table("admins").select("id, email, name").eq("id", registration.user_id).limit(1).execute()
         
         if not user_response.data and not admin_response.data:
             raise HTTPException(status_code=404, detail="User not found")
         
-        # Validate event exists
-        event_response = supabase.table("events").select("id, title, capacity, attendees").eq("id", registration.event_id).limit(1).execute()
+        # Get user details for email
+        user_data = user_response.data[0] if user_response.data else admin_response.data[0]
+        user_email = user_data.get("email")
+        user_name = user_data.get("name") or "Valued Member"
+        
+        # Validate event exists and get full details for email
+        event_response = supabase.table("events").select("id, title, capacity, attendees, date_time, location, slug").eq("id", registration.event_id).limit(1).execute()
         if not event_response.data:
             raise HTTPException(status_code=404, detail="Event not found")
         
@@ -66,10 +74,11 @@ async def create_event_registration(registration: EventRegistrationRequest):
         if event_data["attendees"] >= event_data["capacity"]:
             raise HTTPException(status_code=400, detail="Event is at full capacity")
         
-        # Create new registration
+        # Create new registration with pending status (will update after email sent)
         registration_response = supabase.table("event_registrations").insert({
             "user_id": registration.user_id,
-            "event_id": registration.event_id
+            "event_id": registration.event_id,
+            "email_status": "pending"
         }).execute()
         
         if not registration_response.data:
@@ -82,6 +91,52 @@ async def create_event_registration(registration: EventRegistrationRequest):
         }).eq("id", registration.event_id).execute()
         
         registration_id = registration_response.data[0]["id"]
+        
+        # Send confirmation email immediately
+        if user_email:
+            try:
+                event_title = event_data.get("title", "Event")
+                event_date_time = event_data.get("date_time", "")
+                event_location = event_data.get("location", "")
+                event_slug = event_data.get("slug")
+                
+                email_sent = await send_confirmation_email(
+                    to_email=user_email,
+                    user_name=user_name,
+                    event_title=event_title,
+                    event_date_time=event_date_time,
+                    event_location=event_location,
+                    event_slug=event_slug,
+                )
+                
+                if email_sent:
+                    # Update registration with confirmation timestamp
+                    supabase.table("event_registrations").update({
+                        "confirmation_sent_at": datetime.utcnow().isoformat(),
+                        "email_status": "confirmation_sent"
+                    }).eq("id", registration_id).execute()
+                    logging.info(f"Confirmation email sent to {user_email} for event {event_title}")
+                else:
+                    # Update to failed status if email didn't send
+                    supabase.table("event_registrations").update({
+                        "email_status": "failed",
+                        "email_error": "Failed to send confirmation email"
+                    }).eq("id", registration_id).execute()
+                    logging.warning(f"Failed to send confirmation email to {user_email}, but registration was created")
+            except Exception as e:
+                logging.error(f"Error sending confirmation email: {e}")
+                # Update to failed status
+                supabase.table("event_registrations").update({
+                    "email_status": "failed",
+                    "email_error": str(e)
+                }).eq("id", registration_id).execute()
+                # Don't fail the registration if email fails
+        else:
+            logging.warning(f"User {registration.user_id} has no email address, skipping confirmation email")
+            # Update status to indicate no email
+            supabase.table("event_registrations").update({
+                "email_status": "no_email"
+            }).eq("id", registration_id).execute()
         
         logging.info(f"Registration created: {registration_id}")
         return EventRegistrationResponse(
@@ -175,15 +230,28 @@ async def cancel_event_registration(registration_id: str):
 @event_registration_router.post("/simple-registration")
 async def simple_event_registration(registration: EventRegistrationRequest):
     """
-    Test endpoint for event registration without authentication
+    Register a user for an event without authentication.
+    Sends confirmation email immediately.
+    Reminder and thank-you emails are sent by scheduled jobs based on dates.
     """
-    logging.info(f"Test registration: user {registration.user_id} for event {registration.event_id}")
+    logging.info(f"Registering user {registration.user_id} for event {registration.event_id}")
     
     try:
         supabase = get_supabase_client()
         
-        # Get event details first
-        event_response = supabase.table("events").select("id, attendees, capacity").eq("id", registration.event_id).limit(1).execute()
+        # Get user details for email
+        user_response = supabase.table("users").select("id, email, name").eq("id", registration.user_id).limit(1).execute()
+        admin_response = supabase.table("admins").select("id, email, name").eq("id", registration.user_id).limit(1).execute()
+        
+        if not user_response.data and not admin_response.data:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        user_data = user_response.data[0] if user_response.data else admin_response.data[0]
+        user_email = user_data.get("email")
+        user_name = user_data.get("name") or "Valued Member"
+        
+        # Get event details (need full details for email)
+        event_response = supabase.table("events").select("id, title, date_time, location, slug, attendees, capacity").eq("id", registration.event_id).limit(1).execute()
         if not event_response.data:
             raise HTTPException(status_code=404, detail="Event not found")
         
@@ -201,10 +269,11 @@ async def simple_event_registration(registration: EventRegistrationRequest):
         if event_data["attendees"] >= event_data["capacity"]:
             raise HTTPException(status_code=400, detail="Event is at full capacity")
         
-        # Create new registration
+        # Create new registration with pending status (will update after email sent)
         registration_response = supabase.table("event_registrations").insert({
             "user_id": registration.user_id,
-            "event_id": registration.event_id
+            "event_id": registration.event_id,
+            "email_status": "pending"
         }).execute()
         
         if not registration_response.data:
@@ -218,19 +287,65 @@ async def simple_event_registration(registration: EventRegistrationRequest):
         
         registration_id = registration_response.data[0]["id"]
         
-        logging.info(f"Test registration created: {registration_id}")
+        # Send confirmation email immediately
+        if user_email:
+            try:
+                event_title = event_data.get("title", "Event")
+                event_date_time = event_data.get("date_time", "")
+                event_location = event_data.get("location", "")
+                event_slug = event_data.get("slug")
+                
+                email_sent = await send_confirmation_email(
+                    to_email=user_email,
+                    user_name=user_name,
+                    event_title=event_title,
+                    event_date_time=event_date_time,
+                    event_location=event_location,
+                    event_slug=event_slug,
+                )
+                
+                if email_sent:
+                    # Update registration with confirmation timestamp
+                    supabase.table("event_registrations").update({
+                        "confirmation_sent_at": datetime.utcnow().isoformat(),
+                        "email_status": "confirmation_sent"
+                    }).eq("id", registration_id).execute()
+                    logging.info(f"Confirmation email sent to {user_email} for event {event_title}")
+                else:
+                    # Update to failed status if email didn't send
+                    supabase.table("event_registrations").update({
+                        "email_status": "failed",
+                        "email_error": "Failed to send confirmation email"
+                    }).eq("id", registration_id).execute()
+                    logging.warning(f"Failed to send confirmation email to {user_email}, but registration was created")
+            except Exception as e:
+                logging.error(f"Error sending confirmation email: {e}")
+                # Update to failed status
+                supabase.table("event_registrations").update({
+                    "email_status": "failed",
+                    "email_error": str(e)
+                }).eq("id", registration_id).execute()
+                # Don't fail the registration if email fails
+        else:
+            logging.warning(f"User {registration.user_id} has no email address, skipping confirmation email")
+            # Update status to indicate no email
+            supabase.table("event_registrations").update({
+                "email_status": "no_email"
+            }).eq("id", registration_id).execute()
+        
+        logging.info(f"Registration created: {registration_id}")
         return {
             "id": registration_id,
             "user_id": registration.user_id,
             "event_id": registration.event_id,
-            "message": "Test registration successful"
+            "message": "Registration successful"
         }
         
     except HTTPException:
         raise
     except Exception as e:
-        logging.error(f"Error in test registration: {e}")
-        raise HTTPException(status_code=500, detail=f"Test registration failed: {str(e)}")
+        logging.error(f"Error in registration: {e}")
+        raise HTTPException(status_code=500, detail=f"Registration failed: {str(e)}")
 
 @event_registration_router.get("/event-attendees/{event_id}")
 async def get_event_attendees(event_id: str):
@@ -413,3 +528,35 @@ async def debug_event_registrations():
             "error": str(e),
             "supabase_connected": False
         }
+
+@event_registration_router.post("/event-emails/process")
+async def process_event_emails():
+    """
+    Endpoint for Supabase cron job to trigger event email processing.
+    Called by the scheduled cron job at 8am PST daily.
+    
+    Processes both:
+    - Reminder emails (for events happening tomorrow)
+    - Thank-you emails (for events that completed yesterday)
+    """
+    try:
+        logging.info("Processing reminder emails for events happening tomorrow...")
+        reminder_count = await process_reminder_emails_for_tomorrow()
+        logging.info(f"Reminder email processing completed. Sent {reminder_count} reminder(s).")
+        
+        logging.info("Processing thank-you emails for events that completed yesterday...")
+        thank_you_count = await process_thank_you_emails()
+        logging.info(f"Thank-you email processing completed. Sent {thank_you_count} thank-you email(s).")
+        
+        return {
+            "success": True,
+            "reminder_emails_sent": reminder_count,
+            "thank_you_emails_sent": thank_you_count,
+            "message": f"Processed emails. Sent {reminder_count} reminder(s) and {thank_you_count} thank-you email(s)."
+        }
+    except Exception as e:
+        logging.error(f"Error processing event emails: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error processing event emails: {str(e)}"
+        )
