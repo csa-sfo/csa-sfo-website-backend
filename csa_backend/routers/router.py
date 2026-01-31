@@ -22,6 +22,7 @@ from agent.sales_agent import run_sales_agent
 from agent.objection_agent import run_objection_agent
 from agent.summary_agent import run_summary_agent
 from agent.info_agent import run_info_agent
+from agent.supabase_mcp_agent import run_supabase_mcp_agent, is_event_query
 from config.logging import setup_logging
 
 def build_updated_history(existing_history: list, user_query: str, bot_response: str) -> list:
@@ -105,7 +106,21 @@ message_router = APIRouter()
 @message_router.post("/message", response_model=ChatResponse)
 async def chat_controller(req: QueryRequest):
     try:
-         context  = await retrieve_context(req.query)
+         user_query = req.query or ""
+         try:
+            supabase_reply = await run_supabase_mcp_agent(user_query)
+            if supabase_reply:
+                return ChatResponse(
+                    response=supabase_reply,
+                    intent="",
+                    routed_agent="supabase_mcp",
+                )
+         except Exception as mcp_exc:
+            logging.warning(f"Supabase MCP fallback failed, using RAG: {mcp_exc}")
+
+         # Route event-centric questions through Supabase MCP for deterministic answers.
+         if is_event_query(user_query):
+            context  = await retrieve_context(user_query)
          # Filter out archived sources to avoid past events leakage
          try:
              meta_matches = context.get("meta", [])
@@ -132,7 +147,7 @@ async def chat_controller(req: QueryRequest):
              upcoming_block = ""
 
          # Greeting/first message → constrain context strictly to upcoming events
-         is_greetings = is_greeting(req.query)
+         is_greetings = is_greeting(user_query)
          is_first_message = len(req.history or []) <= 1
 
          if (is_greetings or is_first_message) and upcoming_block:
@@ -144,8 +159,8 @@ async def chat_controller(req: QueryRequest):
 
          context_txt = "\n\n".join(context_chunks)
          #logging.info(f"Context text: {context_txt}")
-         history = req.history if req.history else ""
-         reply = await run_sales_agent(req.query, context_txt, history=history)
+         history = req.history if req.history else []
+         reply = await run_sales_agent(user_query, context_txt, history=history)
 
          logging.info(f"Sales Agent response: {reply}")
          return ChatResponse(

@@ -5,6 +5,7 @@ from models.event_models import AgendaItem
 from models.event_models import Speaker
 from pydantic import BaseModel
 from services.auth_services import verify_token, get_admin_by_email
+from routers.event_images import sync_event_images_from_drive
 from fastapi.security import OAuth2PasswordBearer
 from typing import Optional, List
 from datetime import datetime
@@ -104,6 +105,14 @@ def create_event(event: Event, token_data: dict = Depends(verify_token)):
         if agenda_item_payload:
             supabase.table("event_agenda").insert(agenda_item_payload).execute()
 
+        # Automatically sync images from Google Drive folder (named after event title)
+        try:
+            sync_result = sync_event_images_from_drive(event.title, admin_data["email"])
+            logging.info(f"Image sync result for event '{event.title}': {sync_result.get('message', 'Unknown')}")
+        except Exception as e:
+            logging.warning(f"Failed to sync images from Google Drive for event '{event.title}': {e}")
+            # Don't fail event creation if image sync fails
+
         logging.info(f"Event created successfully: {event_id}")
         return {
             "message": "Event created successfully", 
@@ -188,6 +197,18 @@ def update_event(event_id: str,event: Event,token_data: dict = Depends(verify_to
                     } for a in event.agenda
                 ]
                 supabase.table("event_agenda").insert(agenda_payload).execute()
+
+        # Automatically sync images from Google Drive folder if event title changed
+        try:
+            # Get the updated event title
+            updated_event = supabase.table("events").select("title").eq("id", str(event_id)).limit(1).execute()
+            if updated_event.data and len(updated_event.data) > 0:
+                event_title = updated_event.data[0]["title"]
+                sync_result = sync_event_images_from_drive(event_title, admin_resp.data[0]["email"])
+                logging.info(f"Image sync result for updated event '{event_title}': {sync_result.get('message', 'Unknown')}")
+        except Exception as e:
+            logging.warning(f"Failed to sync images from Google Drive during event update: {e}")
+            # Don't fail event update if image sync fails
 
         logging.info(f"Event {event_id} updated")
         return {"message": "Event updated successfully", "event_id": str(event_id)}

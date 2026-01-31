@@ -25,6 +25,7 @@ SUPABASE_SERVICE_KEY = os.getenv("CSA_SUPABASE_SERVICE_KEY")
 SUPABASE_REDIRECT_URL = os.getenv("CSA_SUPABASE_REDIRECT_URL")
 JWT_SECRET_KEY = os.getenv("CSA_JWT_SECRET_KEY")
 SUPABASE_GOOGLE_PROVIDER = os.getenv("CSA_SUPABASE_GOOGLE_PROVIDER")
+SUPABASE_ACCESS_TOKEN = os.getenv("CSA_SUPABASE_ACCESS_TOKEN")
 
 # LinkedIn OAuth Configuration
 LINKEDIN_CLIENT_ID = os.getenv("CSA_LINKEDIN_CLIENT_ID")
@@ -36,6 +37,13 @@ TO_EMAIL = os.getenv("CSA_TO_EMAIL_1")
 FROM_NAME = os.getenv("CSA_FROM_NAME")
 MAILERSEND_API_KEY = os.getenv("CSA_MAILERSEND_API_KEY")
 MAILERSEND_API = os.getenv("CSA_MAILERSEND_API")
+
+# AWS SES Configuration
+AWS_ACCESS_KEY_ID = os.getenv("CSA_AWS_ACCESS_KEY_ID")
+AWS_SECRET_ACCESS_KEY = os.getenv("CSA_AWS_SECRET_ACCESS_KEY")
+AWS_REGION = os.getenv("CSA_AWS_REGION", "us-east-1")
+AWS_SES_FROM_EMAIL = os.getenv("CSA_AWS_SES_FROM_EMAIL", FROM_EMAIL)
+AWS_SES_FROM_NAME = os.getenv("CSA_AWS_SES_FROM_NAME", FROM_NAME)
 
 # Teams Webhook Configuration
 TEAMS_WEBHOOK_URL = os.getenv("CSA_TEAMS_WEBHOOK_URL")
@@ -70,3 +78,10 @@ FRONTEND_BASE_URL = os.getenv("CSA_FRONTEND_BASE_URL", "http://localhost:8080")
 # LinkedIn OAuth MCP Configuration
 LINKEDIN_REDIRECT_URI = os.getenv("CSA_LINKEDIN_REDIRECT_URI", "http://localhost:8000/v1/routes/linkedin/callback")
 
+# Google Drive Configuration
+GOOGLE_DRIVE_CLIENT_ID = os.getenv("CSA_GOOGLE_DRIVE_CLIENT_ID")
+GOOGLE_DRIVE_CLIENT_SECRET = os.getenv("CSA_GOOGLE_DRIVE_CLIENT_SECRET")
+GOOGLE_DRIVE_CREDENTIALS_FILE = os.getenv("CSA_GOOGLE_DRIVE_CREDENTIALS_FILE")  # Fallback: Path to JSON file
+GOOGLE_DRIVE_FOLDER_ID = os.getenv("CSA_GOOGLE_DRIVE_FOLDER_ID")  # Optional: Root folder ID to search in
+GOOGLE_DRIVE_WEBHOOK_URL = os.getenv("CSA_GOOGLE_DRIVE_WEBHOOK_URL")  # Public URL for receiving webhooks (e.g., https://yourdomain.com/api/v1/google-drive/webhook)
+GOOGLE_DRIVE_SYNC_INTERVAL = int(os.getenv("CSA_GOOGLE_DRIVE_SYNC_INTERVAL", "60"))  # Fallback polling interval in minutes (default: 2) - only used if webhooks not available

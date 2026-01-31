@@ -32,5 +32,10 @@ async def run_sales_agent(user_message: str, context: str, history: str) -> str:
     # response, cache_source, response_time = await async_cache_workflow(prompt, sales_func)
     # logging.info(f"Sales Agent Greeting response: {response} (Cache Source: {cache_source}, Response Time: {response_time:.4f}s)")
 
-    response = await run_openai_prompt(prompt, model=OPENAI_MODEL, temperature=0.7)
+    response = await run_openai_prompt(
+        prompt,
+        model=OPENAI_MODEL,
+        temperature=0.7,
+        history=history,
+    )
     return await ensure_markdown(response)
