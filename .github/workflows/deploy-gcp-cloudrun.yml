@@ -98,6 +98,8 @@ jobs:
             CSA_AWS_SES_FROM_EMAIL=CSA_AWS_SES_FROM_EMAIL:latest
             CSA_AWS_SES_FROM_NAME=CSA_AWS_SES_FROM_NAME:latest
             CSA_FRONTEND_URL=CSA_FRONTEND_URL:latest
+            CSA_LINKEDIN_REDIRECT_URI=CSA_LINKEDIN_REDIRECT_URI:latest
+            CSA_MCP_SERVER_URL=CSA_MCP_SERVER_URL:latest
           flags: >
             --service-account=csasfo-runtime-sa@${{ env.PROJECT_ID }}.iam.gserviceaccount.com
             --allow-unauthenticated
