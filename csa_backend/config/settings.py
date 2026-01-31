@@ -62,8 +62,8 @@ STRIPE_SECRET_KEY = os.getenv("CSA_STRIPE_SECRET_KEY")
 STRIPE_WEBHOOK_SECRET = os.getenv("CSA_STRIPE_WEBHOOK_SECRET")
 
 # MCP Server Configuration
-MCP_SERVER_URL = os.getenv("CSA_MCP_SERVER_URL", "https://csa-mcp-573977120798.us-east1.run.app/mcp")
 
+MCP_SERVER_URL = os.getenv("CSA_MCP_SERVER_URL", "https://127.0.0.1:3000/mcp")
 # Frontend Configuration
 FRONTEND_BASE_URL = os.getenv("CSA_FRONTEND_BASE_URL", "http://localhost:8080")
 
