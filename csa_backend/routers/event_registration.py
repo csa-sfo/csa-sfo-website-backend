@@ -1,13 +1,17 @@
 import logging
 from fastapi import APIRouter, HTTPException, Depends
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from supabase import create_client, Client
 import os
 from typing import Optional
+from io import BytesIO
 from services.auth_services import verify_admin_token
 from services.event_email_scheduler import process_reminder_emails_for_tomorrow, process_thank_you_emails
 from services.event_email_service import send_confirmation_email
 from datetime import datetime
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Alignment
 
 # Initialize router
 event_registration_router = APIRouter()
@@ -559,4 +563,163 @@ async def process_event_emails():
         raise HTTPException(
             status_code=500,
             detail=f"Error processing event emails: {str(e)}"
+        )
+
+@event_registration_router.get("/export-attendees/{event_id}")
+async def export_event_attendees_to_excel(event_id: str, token_data: dict = Depends(verify_admin_token)):
+    """
+    Export all attendees for a specific event to an Excel file.
+    Admin only endpoint.
+    """
+    try:
+        supabase = get_supabase_client()
+        
+        # Get event details
+        event_response = supabase.table("events").select("id, title, date_time, location").eq("id", event_id).execute()
+        if not event_response.data:
+            raise HTTPException(status_code=404, detail="Event not found")
+        
+        event = event_response.data[0]
+        
+        # Get all registrations for this event
+        registrations_response = supabase.table("event_registrations").select("event_id, user_id, updated_at").eq("event_id", event_id).execute()
+        registrations = registrations_response.data if registrations_response.data else []
+        
+        if not registrations:
+            # No registrations, return empty Excel file
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "Attendees"
+            ws.append(["No attendees found for this event"])
+            output = BytesIO()
+            wb.save(output)
+            output.seek(0)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"attendees_{event.get('title', 'event').replace(' ', '_')}_{timestamp}.xlsx"
+            return StreamingResponse(
+                output,
+                media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                headers={"Content-Disposition": f"attachment; filename={filename}"}
+            )
+        
+        # Get all unique user IDs
+        user_ids = list(set([reg["user_id"] for reg in registrations]))
+        
+        # Get user details
+        users_response = supabase.table("users").select("id, name, email, company_name, role, avatar_url").in_("id", user_ids).execute()
+        users = users_response.data if users_response.data else []
+        
+        # Get admin details (in case admins registered)
+        admins_response = supabase.table("admins").select("id, name, email").in_("id", user_ids).execute()
+        admins = admins_response.data if admins_response.data else []
+        
+        # Create user map
+        user_map = {}
+        for user in users:
+            user_map[user["id"]] = {
+                **user,
+                "user_type": "user"
+            }
+        for admin in admins:
+            user_map[admin["id"]] = {
+                **admin,
+                "user_type": "admin",
+                "company_name": "CSA Admin",
+                "role": "Administrator",
+                "avatar_url": None
+            }
+        
+        # Create Excel workbook
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Attendees"
+        
+        # Add event info header
+        ws.append(["Event Information"])
+        ws.append(["Event Title", event.get("title", "")])
+        ws.append(["Event Date", event.get("date_time", "")])
+        ws.append(["Event Location", event.get("location", "")])
+        ws.append([])  # Empty row
+        
+        # Header row
+        headers = [
+            "Name", "Email", "Company", "Role", "User Type",
+            "Registration Date"
+        ]
+        ws.append(headers)
+        
+        # Style header row
+        header_fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
+        header_font = Font(bold=True, color="FFFFFF")
+        for cell in ws[6]:  # Row 6 is the header row (after event info)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+        
+        # Add data rows
+        for reg in registrations:
+            user_id = reg["user_id"]
+            user = user_map.get(user_id, {})
+            
+            # Format registration date (using updated_at as registration timestamp)
+            reg_date = ""
+            if reg.get("updated_at"):
+                try:
+                    dt_str = reg["updated_at"]
+                    if dt_str.endswith("Z"):
+                        dt_str = dt_str[:-1] + "+00:00"
+                    dt = datetime.fromisoformat(dt_str)
+                    reg_date = dt.strftime("%Y-%m-%d %H:%M")
+                except Exception as e:
+                    logging.debug(f"Error parsing registration date: {e}")
+                    reg_date = reg.get("updated_at", "")
+            
+            row = [
+                user.get("name", "Unknown"),
+                user.get("email", ""),
+                user.get("company_name", ""),
+                user.get("role", ""),
+                user.get("user_type", "user"),
+                reg_date
+            ]
+            ws.append(row)
+        
+        # Auto-adjust column widths
+        for column in ws.columns:
+            max_length = 0
+            column_letter = column[0].column_letter
+            for cell in column:
+                try:
+                    if cell.value and len(str(cell.value)) > max_length:
+                        max_length = len(str(cell.value))
+                except:
+                    pass
+            adjusted_width = min(max_length + 2, 50)
+            ws.column_dimensions[column_letter].width = adjusted_width
+        
+        # Create BytesIO buffer
+        output = BytesIO()
+        wb.save(output)
+        output.seek(0)
+        
+        # Generate filename with event title and timestamp
+        event_title_safe = "".join(c for c in event.get("title", "event") if c.isalnum() or c in (' ', '-', '_')).strip()[:50]
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"attendees_{event_title_safe.replace(' ', '_')}_{timestamp}.xlsx"
+        
+        return StreamingResponse(
+            output,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={
+                "Content-Disposition": f"attachment; filename={filename}"
+            }
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error exporting event attendees to Excel: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error exporting attendees: {str(e)}"
         )
